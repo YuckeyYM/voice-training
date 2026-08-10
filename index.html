@@ -121,6 +121,7 @@ let currentEx = EXERCISES[0];
 
 /* ================= 状態 ================= */
 let audioCtx=null, mediaStream=null, analyser=null, procNode=null, srcNode=null;
+let mediaRecorder=null, chunks=[], useMR=false;
 let recording=false, recSamples=[], recStart=0, sr=48000;
 let phaseA=null; // 舌出し練習の①録音の解析結果
 let lastResult=null;
@@ -159,10 +160,20 @@ async function ensureAudio(){
   sr = audioCtx.sampleRate;
   srcNode = audioCtx.createMediaStreamSource(mediaStream);
   analyser = audioCtx.createAnalyser(); analyser.fftSize=2048;
-  procNode = audioCtx.createScriptProcessor(4096,1,1);
-  procNode.onaudioprocess = e=>{ if(recording) recSamples.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
-  srcNode.connect(analyser); srcNode.connect(procNode); procNode.connect(audioCtx.destination);
+  srcNode.connect(analyser);
+  // iOS Safari では ScriptProcessorNode が無音を返すことがあるため MediaRecorder を優先する
+  useMR = (typeof MediaRecorder !== "undefined");
+  if(!useMR){
+    procNode = audioCtx.createScriptProcessor(4096,1,1);
+    procNode.onaudioprocess = e=>{ if(recording) recSamples.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+    srcNode.connect(procNode); procNode.connect(audioCtx.destination);
+  }
   requestAnimationFrame(drawViz);
+}
+function pickMime(){
+  const cands=["audio/mp4","audio/webm;codecs=opus","audio/webm","audio/mpeg"];
+  for(const m of cands){ try{ if(MediaRecorder.isTypeSupported(m)) return m; }catch(e){} }
+  return "";
 }
 let recPhase="single"; // single | A | B
 $("recBtn").onclick=async()=>{
@@ -181,9 +192,22 @@ $("recBtnB").onclick=async()=>{
 };
 let activeBtn=null;
 function startRecording(btn){
-  recSamples=[]; recording=true; recStart=performance.now(); activeBtn=btn;
+  recSamples=[]; chunks=[]; recording=true; recStart=performance.now(); activeBtn=btn;
   btn.textContent="停止して採点"; btn.classList.add("rec");
   $("resultCard").classList.add("hidden");
+  if(useMR){
+    try{
+      const mime=pickMime();
+      mediaRecorder = mime ? new MediaRecorder(mediaStream,{mimeType:mime}) : new MediaRecorder(mediaStream);
+      mediaRecorder.ondataavailable = e=>{ if(e.data && e.data.size) chunks.push(e.data); };
+      mediaRecorder.start();
+    }catch(err){
+      useMR=false;
+      alert("録音の開始に失敗しました: "+err.message);
+      recording=false; btn.classList.remove("rec");
+      return;
+    }
+  }
   tickTime();
 }
 function tickTime(){
@@ -191,16 +215,42 @@ function tickTime(){
   $("liveTime").textContent=((performance.now()-recStart)/1000).toFixed(1)+"s";
   setTimeout(tickTime,100);
 }
-function stopRecording(silent){
+async function stopRecording(silent){
   recording=false;
   if(activeBtn){ activeBtn.classList.remove("rec"); }
   if(currentEx.id==="tongue"){ $("recBtn").textContent="① 舌なしで録音"; $("recBtnB").textContent="② 舌出しで録音"; }
   else $("recBtn").textContent="録音スタート";
+  if(useMR && mediaRecorder && mediaRecorder.state!=="inactive"){
+    const stopped=new Promise(res=>{ mediaRecorder.onstop=res; });
+    try{ mediaRecorder.stop(); }catch(e){}
+    await stopped;
+    if(silent) return;
+    try{
+      const blob=new Blob(chunks,{type:(mediaRecorder.mimeType||"audio/mp4")});
+      if(blob.size<800){ alert("録音データが空でした。マイクへのアクセスが他のアプリに取られていないかご確認ください。"); return; }
+      const decoded=await audioCtx.decodeAudioData(await blob.arrayBuffer());
+      sr=decoded.sampleRate;
+      finishRecording(decoded.getChannelData(0));
+    }catch(err){
+      alert("録音の解析に失敗しました: "+err.name+" — "+err.message);
+    }
+    return;
+  }
   if(silent) return;
   const total=recSamples.reduce((a,b)=>a+b.length,0);
-  if(total < sr*0.7){ alert("録音が短すぎます（0.7秒以上）"); return; }
   const buf=new Float32Array(total); let off=0;
   for(const c of recSamples){ buf.set(c,off); off+=c.length; }
+  finishRecording(buf);
+}
+function finishRecording(buf){
+  if(buf.length < sr*0.7){ alert("録音が短すぎます（0.7秒以上録音してください）"); return; }
+  let peak=0;
+  for(let i=0;i<buf.length;i++){ const a=Math.abs(buf[i]); if(a>peak) peak=a; }
+  if(peak<0.005){
+    alert("音が検出できませんでした（最大レベル "+(20*Math.log10(peak+1e-9)).toFixed(0)+"dB）。\n\n・マイクに近づいてください\n・他のアプリが録音中でないか確認してください\n・iPhoneでイヤホン接続中の場合は外してお試しください");
+    return;
+  }
+  $("liveLevel").textContent=(20*Math.log10(peak)).toFixed(0)+" dB";
   evaluate(buf);
 }
 
