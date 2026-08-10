@@ -74,7 +74,7 @@
   <div id="metricList"></div>
   <div class="advice" id="adviceBox"></div>
   <div class="btnrow">
-    <button class="ghost" id="saveObsBtn">Obsidianに保存</button>
+    <button class="primary" id="uriBtn">Obsidianに追記</button>
     <button class="plain" id="copyBtn">結果をコピー</button>
   </div>
   <div class="status" id="saveStatus"></div>
@@ -87,9 +87,22 @@
 
 <div class="card settings">
   <div class="hist-title">Obsidian連携</div>
-  <button class="plain" id="pickDirBtn">保存先フォルダを選ぶ（Vault内のフォルダ）</button>
-  <label class="chk"><input type="checkbox" id="autoSaveChk"> 採点のたびに自動保存する</label>
-  <div class="status" id="dirStatus">保存先：未設定（未設定の場合は.mdファイルをダウンロードします）</div>
+  <div style="margin-bottom:10px">
+    <div style="font-size:12px;color:var(--sub)">Vault名</div>
+    <input id="vaultName" value="fast" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;font-family:inherit;font-size:14px">
+    <div style="font-size:12px;color:var(--sub);margin-top:6px">保存先フォルダ（Vault内のパス）</div>
+    <input id="vaultPath" value="VoiceTraining/Sessions" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;font-family:inherit;font-size:14px">
+  </div>
+  <label class="chk"><input type="checkbox" id="autoSaveChk"> 採点のたびに自動でObsidianに追記する</label>
+  <div class="status">「Obsidianに追記」はObsidianアプリを呼び出して直接ノートに書き込みます。Mac・iPhoneどちらでも動きます。</div>
+  <details style="margin-top:10px">
+    <summary style="cursor:pointer;font-size:13px;color:var(--sub)">上級者向け：フォルダに直接保存する</summary>
+    <div style="margin-top:8px">
+      <button class="plain" id="pickDirBtn">保存先フォルダを選ぶ</button>
+      <button class="plain" id="saveObsBtn">今の結果をフォルダに保存</button>
+      <div class="status" id="dirStatus">保存先：未設定</div>
+    </div>
+  </details>
 </div>
 
 <script>
@@ -508,7 +521,7 @@ function showResult(score,metrics,advice){
   $("saveStatus").textContent="";
   saveHistory(lastResult);
   drawChart();
-  if($("autoSaveChk").checked) saveToObsidian(true);
+  if($("autoSaveChk").checked){ if(dirHandle) saveToObsidian(true); else obsidianAppend(); }
 }
 
 /* ================= 履歴 ================= */
@@ -549,16 +562,52 @@ const idb={
     if(dirHandle) $("dirStatus").textContent="保存先："+dirHandle.name+"（初回保存時に許可を求められる場合があります）";
   }catch(e){}
   $("autoSaveChk").checked = localStorage.getItem("vt_auto")==="1";
+  const v=localStorage.getItem("vt_vault"); if(v) $("vaultName").value=v;
+  const p=localStorage.getItem("vt_path"); if(p) $("vaultPath").value=p;
+  if(location.protocol==="file:"){
+    $("dirStatus").textContent="⚠️ ファイルを直接開いているため、フォルダ保存は使えません（ブラウザの制限）。上の「Obsidianに追記」を使ってください。";
+  }
 })();
+function trimSlash(s){ s=(s||"").trim(); while(s.startsWith("/")) s=s.slice(1); while(s.endsWith("/")) s=s.slice(0,-1); return s; }
 $("autoSaveChk").onchange=e=>localStorage.setItem("vt_auto",e.target.checked?"1":"0");
+$("vaultName").onchange=e=>localStorage.setItem("vt_vault",e.target.value.trim());
+$("vaultPath").onchange=e=>localStorage.setItem("vt_path",trimSlash(e.target.value));
 $("pickDirBtn").onclick=async()=>{
-  if(!window.showDirectoryPicker){ alert("このブラウザはフォルダ保存に未対応です（Chrome/Edge推奨）。保存時は.mdファイルをダウンロードします。"); return; }
+  if(location.protocol==="file:"){
+    alert("ファイルを直接開いた状態では、ブラウザの制限によりフォルダを指定できません。「Obsidianに追記」をお使いください。");
+    return;
+  }
+  if(!window.showDirectoryPicker){
+    alert("このブラウザはフォルダ保存に未対応です（Mac版のChrome/Edgeのみ）。「Obsidianに追記」をお使いください。");
+    return;
+  }
   try{
     dirHandle=await showDirectoryPicker({mode:"readwrite"});
     await idb.set("dir",dirHandle);
     $("dirStatus").textContent="保存先："+dirHandle.name;
-  }catch(e){}
+  }catch(e){
+    if(e.name==="AbortError") return;
+    $("dirStatus").textContent="フォルダを指定できませんでした: "+e.name+" — "+e.message;
+  }
 };
+
+/* Obsidian URI で直接ノートに追記（Mac・iPhone両対応） */
+function obsidianAppend(){
+  if(!lastResult) return;
+  const vault=$("vaultName").value.trim();
+  if(!vault){ $("saveStatus").textContent="Vault名を入力してください。"; return; }
+  const folder=trimSlash($("vaultPath").value);
+  const dateStr=new Date().toLocaleDateString("sv-SE");
+  const fileP=(folder?folder+"/":"")+"ボイトレ "+dateStr;
+  const url="obsidian://new?vault="+encodeURIComponent(vault)
+          +"&file="+encodeURIComponent(fileP)
+          +"&append=true"
+          +"&content="+encodeURIComponent(resultToMd(lastResult));
+  if(url.length>7000){ $("saveStatus").textContent="内容が長すぎます。「結果をコピー」をお使いください。"; return; }
+  window.location.href=url;
+  $("saveStatus").textContent="✅ Obsidianを開きました（"+fileP+".md に追記）。";
+}
+$("uriBtn").onclick=obsidianAppend;
 function resultToMd(r){
   const hm=r.time.toTimeString().slice(0,5);
   let md=`\n## ${hm} ${r.ex.name.replace(/^\d+\.\s*/,"")} — **${r.score}点**\n`;
