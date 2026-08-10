@@ -126,9 +126,10 @@
 <script>
 "use strict";
 /* ================= バージョン ================= */
-const APP_VERSION = "v1.3.0";
+const APP_VERSION = "v1.4.0";
 const APP_DATE    = "2026-08-10";
 const CHANGELOG = [
+  ["v1.4.0","2026-08-10","iPhoneでスコアが低く出る問題を修正（録音レベルに依存しない解析に変更）"],
   ["v1.3.0","2026-08-10","バージョン表示と録音方式の表示を追加"],
   ["v1.2.0","2026-08-10","iPhoneで0点になる不具合を修正（録音をMediaRecorderに変更）"],
   ["v1.1.0","2026-08-10","Obsidianに直接追記する機能を追加（Mac・iPhone対応）"],
@@ -153,6 +154,7 @@ let mediaRecorder=null, chunks=[], useMR=false;
 let recording=false, recSamples=[], recStart=0, sr=48000;
 let phaseA=null; // 舌出し練習の①録音の解析結果
 let lastResult=null;
+let recGain=1, recPeakDb=0; // 正規化に使った倍率と、録音時の実際のピークレベル
 
 /* ================= UI 初期化 ================= */
 const $=id=>document.getElementById(id);
@@ -207,6 +209,8 @@ async function ensureAudio(){
   }
   $("recMode").textContent = "録音方式：" + (useMR ? "MediaRecorder（iPhone対応）" : "ScriptProcessor（旧方式）")
     + " ／ サンプリング " + sr + "Hz";
+  // iOSでは音声セッション確立直後の数百msが無音になることがあるため、少し待ってから録音可能にする
+  await new Promise(r=>setTimeout(r,350));
   requestAnimationFrame(drawViz);
 }
 function pickMime(){
@@ -285,12 +289,17 @@ function finishRecording(buf){
   if(buf.length < sr*0.7){ alert("録音が短すぎます（0.7秒以上録音してください）"); return; }
   let peak=0;
   for(let i=0;i<buf.length;i++){ const a=Math.abs(buf[i]); if(a>peak) peak=a; }
-  if(peak<0.005){
+  if(peak<0.0015){
     alert("音が検出できませんでした（最大レベル "+(20*Math.log10(peak+1e-9)).toFixed(0)+"dB）。\n\n・マイクに近づいてください\n・他のアプリが録音中でないか確認してください\n・iPhoneでイヤホン接続中の場合は外してお試しください");
     return;
   }
-  $("liveLevel").textContent=(20*Math.log10(peak)).toFixed(0)+" dB";
-  evaluate(buf);
+  // 端末による録音レベルの差をなくすため、ピークを揃えてから解析する
+  recPeakDb = 20*Math.log10(peak);
+  recGain = 0.9/peak;
+  const norm = new Float32Array(buf.length);
+  for(let i=0;i<buf.length;i++) norm[i] = buf[i]*recGain;
+  $("liveLevel").textContent = recPeakDb.toFixed(0)+" dB";
+  evaluate(norm);
 }
 
 /* ================= 可視化 ================= */
@@ -368,8 +377,15 @@ function analyzeBuffer(buf){
     let s=0; for(let j=i;j<i+win;j++) s+=buf[j]*buf[j];
     rms.push(Math.sqrt(s/win)); times.push(i/sr);
   }
-  const peak=Math.max(...rms);
-  const thr=Math.max(0.008, peak*0.12);
+  let peak=0; for(const v of rms) if(v>peak) peak=v;
+  // 適応しきい値：暗騒音と信号レベルを分位数から推定するので、録音レベルの大小に影響されない
+  const sorted=rms.slice().sort((a,b)=>a-b);
+  const q=p=>sorted[Math.max(0,Math.min(sorted.length-1,Math.round(p*(sorted.length-1))))];
+  const noiseLv=q(0.10), sigLv=q(0.90);
+  let thr = noiseLv + (sigLv-noiseLv)*0.15;
+  if(!(thr>0) || sigLv < noiseLv*1.5) thr = peak*0.10;  // 信号と暗騒音が分離できない場合
+  if(thr < peak*0.02) thr = peak*0.02;                  // 下限
+  if(thr > peak*0.30) thr = peak*0.30;                  // 上限（単発の破裂音で吊り上がるのを防ぐ）
   const voiced=rms.map(v=>v>thr);
   // ピッチ（25ms間隔）
   const pwin=Math.round(sr*0.04), phop=Math.round(sr*0.025);
@@ -562,7 +578,7 @@ function evaluate(buf){
   }
   else if(ex==="cv"){
     const v=an.rms.filter((r,i)=>an.voiced[i]);
-    const db=20*Math.log10(mean(v)+1e-6);
+    const db=20*Math.log10(mean(v)/recGain+1e-9); // 正規化前の実レベルに戻して評価する
     const strength=clamp((db+34)/22*100); // -34dB→0, -12dB→100
     const vs=volumeStability(an); const ps=pitchStability(an);
     m.push(["母音の張り（音圧）",strength,db.toFixed(0)+" dB"]);
@@ -596,6 +612,7 @@ function evaluate(buf){
 }
 
 function showResult(score,metrics,advice){
+  if(recPeakDb < -28) advice = advice.concat("録音レベルが低めです（ピーク "+recPeakDb.toFixed(0)+"dB）。マイクに近づくと解析の精度が上がります。");
   lastResult={ex:currentEx, score, metrics, advice, time:new Date()};
   $("scoreVal").textContent=score;
   const ml=$("metricList"); ml.innerHTML="";
