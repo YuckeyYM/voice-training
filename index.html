@@ -45,10 +45,15 @@
   .hidden{display:none;}
   .phase-note{font-size:12px; color:var(--accent); margin-top:6px;}
   label.chk{display:flex; align-items:center; gap:6px; cursor:pointer;}
+  .ver{display:inline-block; vertical-align:middle; font-size:11px; font-weight:400; color:var(--accent); background:var(--accent-soft); border-radius:10px; padding:2px 8px; margin-left:6px;}
+  .about{font-size:12px; color:var(--sub); line-height:1.8;}
+  .about b{color:var(--ink);}
+  .about ul{margin:6px 0 0 18px;}
+  .about li{margin:2px 0;}
 </style>
 </head>
 <body>
-<h1>ボイトレ評価</h1>
+<h1>ボイトレ評価<span class="ver" id="verChip"></span></h1>
 <div class="sub" id="today"></div>
 
 <div class="tabs" id="tabs"></div>
@@ -105,8 +110,31 @@
   </details>
 </div>
 
+<div class="card about">
+  <div class="hist-title">このアプリについて</div>
+  <div>バージョン <b id="verFull"></b>　更新日 <b id="verDate"></b></div>
+  <div id="recMode">録音方式：未判定（録音を1回行うと表示されます）</div>
+  <details style="margin-top:8px">
+    <summary style="cursor:pointer">更新履歴</summary>
+    <ul id="changelog"></ul>
+  </details>
+  <div style="margin-top:8px">
+    最新版が表示されない場合は、ページを強めに再読み込みしてください（Mac: Cmd+Shift+R ／ iPhone: プライベートタブで開く）。
+  </div>
+</div>
+
 <script>
 "use strict";
+/* ================= バージョン ================= */
+const APP_VERSION = "v1.3.0";
+const APP_DATE    = "2026-08-10";
+const CHANGELOG = [
+  ["v1.3.0","2026-08-10","バージョン表示と録音方式の表示を追加"],
+  ["v1.2.0","2026-08-10","iPhoneで0点になる不具合を修正（録音をMediaRecorderに変更）"],
+  ["v1.1.0","2026-08-10","Obsidianに直接追記する機能を追加（Mac・iPhone対応）"],
+  ["v1.0.0","2026-08-10","初版：7種類の練習メニューの採点に対応"],
+];
+
 /* ================= 練習メニュー定義 ================= */
 const EXERCISES = [
  {id:"lip", name:"1. リップロール", desc:"唇を軽く閉じて息で震わせ、一定の音程でできるだけ長く続けます。目標：10秒以上、音程と震えが安定していること。"},
@@ -129,6 +157,15 @@ let lastResult=null;
 /* ================= UI 初期化 ================= */
 const $=id=>document.getElementById(id);
 $("today").textContent = new Date().toLocaleDateString("ja-JP",{year:"numeric",month:"long",day:"numeric",weekday:"short"});
+$("verChip").textContent = APP_VERSION;
+$("verFull").textContent = APP_VERSION;
+$("verDate").textContent = APP_DATE;
+document.title = "ボイトレ評価 " + APP_VERSION;
+CHANGELOG.forEach(([v,d,note])=>{
+  const li=document.createElement("li");
+  li.textContent = v+"（"+d+"）— "+note;
+  $("changelog").appendChild(li);
+});
 const tabsEl=$("tabs");
 EXERCISES.forEach((ex,i)=>{
   const b=document.createElement("button");
@@ -168,6 +205,8 @@ async function ensureAudio(){
     procNode.onaudioprocess = e=>{ if(recording) recSamples.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
     srcNode.connect(procNode); procNode.connect(audioCtx.destination);
   }
+  $("recMode").textContent = "録音方式：" + (useMR ? "MediaRecorder（iPhone対応）" : "ScriptProcessor（旧方式）")
+    + " ／ サンプリング " + sr + "Hz";
   requestAnimationFrame(drawViz);
 }
 function pickMime(){
