@@ -72,6 +72,18 @@
     <button class="ghost hidden" id="recBtnB">② 舌出しで録音</button>
   </div>
   <div class="phase-note hidden" id="phaseNote"></div>
+  <div class="phase-note hidden" id="micWarn"></div>
+</div>
+
+<div class="card hidden" id="pendingCard">
+  <div class="hist-title">未送信の記録 <span id="pendCount"></span></div>
+  <div class="status">練習中はここに貯まります。最後にまとめて送れば、Obsidianへの切り替えは1回で済みます。</div>
+  <div class="btnrow">
+    <button class="primary" id="sendAllBtn">まとめてObsidianへ送る</button>
+    <button class="plain" id="copyAllBtn">まとめてコピー</button>
+    <button class="plain" id="clearPendBtn">破棄</button>
+  </div>
+  <div class="status" id="pendStatus"></div>
 </div>
 
 <div class="card hidden" id="resultCard">
@@ -126,9 +138,10 @@
 <script>
 "use strict";
 /* ================= バージョン ================= */
-const APP_VERSION = "v1.4.0";
+const APP_VERSION = "v1.5.0";
 const APP_DATE    = "2026-08-10";
 const CHANGELOG = [
+  ["v1.5.0","2026-08-10","Obsidianから戻るとマイクが無効になる問題を修正／まとめて送信を追加"],
   ["v1.4.0","2026-08-10","iPhoneでスコアが低く出る問題を修正（録音レベルに依存しない解析に変更）"],
   ["v1.3.0","2026-08-10","バージョン表示と録音方式の表示を追加"],
   ["v1.2.0","2026-08-10","iPhoneで0点になる不具合を修正（録音をMediaRecorderに変更）"],
@@ -192,8 +205,26 @@ function selectEx(ex,btn){
 selectEx(currentEx,document.querySelector(".tab"));
 
 /* ================= 録音 ================= */
+// iOSでは他アプリに切り替えるとマイクのトラックが終了させられるため、毎回生死を確認する
+function audioAlive(){
+  if(!audioCtx || !mediaStream) return false;
+  if(audioCtx.state === "closed") return false;
+  const tr = mediaStream.getAudioTracks()[0];
+  return !!tr && tr.readyState === "live";
+}
+function teardownAudio(){
+  try{ if(mediaStream) mediaStream.getTracks().forEach(t=>t.stop()); }catch(e){}
+  try{ if(procNode) procNode.disconnect(); }catch(e){}
+  try{ if(srcNode) srcNode.disconnect(); }catch(e){}
+  try{ if(audioCtx && audioCtx.state!=="closed") audioCtx.close(); }catch(e){}
+  audioCtx=null; mediaStream=null; analyser=null; srcNode=null; procNode=null; mediaRecorder=null;
+}
 async function ensureAudio(){
-  if(audioCtx) return;
+  if(audioAlive()){
+    if(audioCtx.state === "suspended"){ try{ await audioCtx.resume(); }catch(e){} }
+    return;
+  }
+  teardownAudio();
   mediaStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
   audioCtx = new (window.AudioContext||window.webkitAudioContext)();
   sr = audioCtx.sampleRate;
@@ -213,6 +244,16 @@ async function ensureAudio(){
   await new Promise(r=>setTimeout(r,350));
   requestAnimationFrame(drawViz);
 }
+// 他アプリから戻ったときの状態確認
+document.addEventListener("visibilitychange", async ()=>{
+  if(document.visibilityState !== "visible") return;
+  if(!audioCtx) return;
+  if(audioCtx.state === "suspended"){ try{ await audioCtx.resume(); }catch(e){} }
+  if(!audioAlive()){
+    $("micWarn").classList.remove("hidden");
+    $("micWarn").textContent = "⚠️ 他のアプリに切り替えたため、マイクが切断されました。「録音スタート」を押すと自動で再接続します。";
+  }
+});
 function pickMime(){
   const cands=["audio/mp4","audio/webm;codecs=opus","audio/webm","audio/mpeg"];
   for(const m of cands){ try{ if(MediaRecorder.isTypeSupported(m)) return m; }catch(e){} }
@@ -235,6 +276,7 @@ $("recBtnB").onclick=async()=>{
 };
 let activeBtn=null;
 function startRecording(btn){
+  $("micWarn").classList.add("hidden");
   recSamples=[]; chunks=[]; recording=true; recStart=performance.now(); activeBtn=btn;
   btn.textContent="停止して採点"; btn.classList.add("rec");
   $("resultCard").classList.add("hidden");
@@ -626,6 +668,8 @@ function showResult(score,metrics,advice){
   $("resultCard").classList.remove("hidden");
   $("saveStatus").textContent="";
   saveHistory(lastResult);
+  pending.push({t:Date.now(), md:resultToMd(lastResult)});
+  savePending();
   drawChart();
   if($("autoSaveChk").checked){ if(dirHandle) saveToObsidian(true); else obsidianAppend(); }
 }
@@ -698,22 +742,86 @@ $("pickDirBtn").onclick=async()=>{
 };
 
 /* Obsidian URI で直接ノートに追記（Mac・iPhone両対応） */
-function obsidianAppend(){
-  if(!lastResult) return;
+function obsidianTarget(){
   const vault=$("vaultName").value.trim();
-  if(!vault){ $("saveStatus").textContent="Vault名を入力してください。"; return; }
+  if(!vault) return null;
   const folder=trimSlash($("vaultPath").value);
   const dateStr=new Date().toLocaleDateString("sv-SE");
-  const fileP=(folder?folder+"/":"")+"ボイトレ "+dateStr;
-  const url="obsidian://new?vault="+encodeURIComponent(vault)
-          +"&file="+encodeURIComponent(fileP)
-          +"&append=true"
-          +"&content="+encodeURIComponent(resultToMd(lastResult));
-  if(url.length>7000){ $("saveStatus").textContent="内容が長すぎます。「結果をコピー」をお使いください。"; return; }
-  window.location.href=url;
-  $("saveStatus").textContent="✅ Obsidianを開きました（"+fileP+".md に追記）。";
+  return {vault, fileP:(folder?folder+"/":"")+"ボイトレ "+dateStr};
+}
+function buildUri(t, content){
+  return "obsidian://new?vault="+encodeURIComponent(t.vault)
+       +"&file="+encodeURIComponent(t.fileP)
+       +"&append=true"
+       +"&content="+encodeURIComponent(content);
+}
+// ページ自体を遷移させずにアプリを呼び出す（遷移させるとSafariの状態が失われやすいため）
+function openUrl(url){
+  const a=document.createElement("a");
+  a.href=url; a.style.display="none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{ try{ a.remove(); }catch(e){} }, 0);
+}
+function obsidianAppend(){
+  if(!lastResult) return;
+  const t=obsidianTarget();
+  if(!t){ $("saveStatus").textContent="Vault名を入力してください。"; return; }
+  const body=resultToMd(lastResult);
+  const url=buildUri(t, body);
+  if(url.length>9000){ $("saveStatus").textContent="内容が長すぎます。「結果をコピー」をお使いください。"; return; }
+  openUrl(url);
+  pending = pending.filter(p=>p.md !== body);
+  savePending();
+  $("saveStatus").textContent="✅ Obsidianを開きました（"+t.fileP+".md に追記）。";
 }
 $("uriBtn").onclick=obsidianAppend;
+
+/* ---- まとめて送信（アプリ切り替えを1回で済ませる） ---- */
+let pending=[];
+try{ pending=JSON.parse(localStorage.getItem("vt_pending")||"[]"); }catch(e){ pending=[]; }
+function savePending(){
+  try{ localStorage.setItem("vt_pending", JSON.stringify(pending.slice(-100))); }catch(e){}
+  renderPending();
+}
+function renderPending(){
+  const c=$("pendingCard");
+  if(!pending.length){ c.classList.add("hidden"); return; }
+  c.classList.remove("hidden");
+  $("pendCount").textContent="（"+pending.length+"件）";
+}
+function pendingText(){ return pending.map(p=>p.md).join(""); }
+$("sendAllBtn").onclick=()=>{
+  if(!pending.length) return;
+  const t=obsidianTarget();
+  if(!t){ $("pendStatus").textContent="Vault名を入力してください。"; return; }
+  let body="", sent=0;
+  for(const p of pending){
+    const test=body+p.md;
+    if(buildUri(t,test).length > 9000) break;
+    body=test; sent++;
+  }
+  if(!sent){ $("pendStatus").textContent="1件が長すぎて送れません。「まとめてコピー」をお使いください。"; return; }
+  openUrl(buildUri(t, body));
+  pending=pending.slice(sent);
+  savePending();
+  $("pendStatus").textContent="✅ "+sent+"件を送りました（"+t.fileP+".md）。"
+    + (pending.length ? " 残り"+pending.length+"件はもう一度押してください。" : "");
+};
+$("copyAllBtn").onclick=async()=>{
+  if(!pending.length) return;
+  try{
+    await navigator.clipboard.writeText(pendingText().trim());
+    $("pendStatus").textContent="📋 "+pending.length+"件をコピーしました。";
+  }catch(e){ $("pendStatus").textContent="コピーできませんでした: "+e.message; }
+};
+$("clearPendBtn").onclick=()=>{
+  if(!pending.length) return;
+  if(!confirm(pending.length+"件の未送信記録を破棄します。よろしいですか？")) return;
+  pending=[]; savePending();
+  $("pendStatus").textContent="破棄しました。";
+};
+renderPending();
 function resultToMd(r){
   const hm=r.time.toTimeString().slice(0,5);
   let md=`\n## ${hm} ${r.ex.name.replace(/^\d+\.\s*/,"")} — **${r.score}点**\n`;
