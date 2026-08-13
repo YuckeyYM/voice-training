@@ -45,6 +45,8 @@
   .hidden{display:none;}
   .phase-note{font-size:12px; color:var(--accent); margin-top:6px;}
   label.chk{display:flex; align-items:center; gap:6px; cursor:pointer;}
+  .update{background:var(--accent); color:#fff; border-radius:10px; padding:12px 14px; margin-bottom:14px; font-size:13px; line-height:1.6;}
+  .update button{background:#fff; color:var(--accent); font-weight:700; padding:8px 14px; margin-top:8px;}
   .ver{display:inline-block; vertical-align:middle; font-size:11px; font-weight:400; color:var(--accent); background:var(--accent-soft); border-radius:10px; padding:2px 8px; margin-left:6px;}
   .about{font-size:12px; color:var(--sub); line-height:1.8;}
   .about b{color:var(--ink);}
@@ -55,6 +57,11 @@
 <body>
 <h1>ボイトレ評価<span class="ver" id="verChip"></span></h1>
 <div class="sub" id="today"></div>
+
+<div class="update hidden" id="updateBar">
+  <div id="updateMsg"></div>
+  <button id="updateBtn">最新版に更新する</button>
+</div>
 
 <div class="tabs" id="tabs"></div>
 
@@ -138,9 +145,10 @@
 <script>
 "use strict";
 /* ================= バージョン ================= */
-const APP_VERSION = "v1.5.0";
-const APP_DATE    = "2026-08-10";
+const APP_VERSION = "v1.6.0";
+const APP_DATE    = "2026-08-13";
 const CHANGELOG = [
+  ["v1.6.0","2026-08-13","更新チェックを追加（新しい版が出たら画面上部で知らせます）"],
   ["v1.5.0","2026-08-10","Obsidianから戻るとマイクが無効になる問題を修正／まとめて送信を追加"],
   ["v1.4.0","2026-08-10","iPhoneでスコアが低く出る問題を修正（録音レベルに依存しない解析に変更）"],
   ["v1.3.0","2026-08-10","バージョン表示と録音方式の表示を追加"],
@@ -181,6 +189,30 @@ CHANGELOG.forEach(([v,d,note])=>{
   li.textContent = v+"（"+d+"）— "+note;
   $("changelog").appendChild(li);
 });
+
+/* ---- 更新チェック（GitHub Pagesは10分間キャッシュされるため、自前で確認する） ---- */
+function verNum(v){
+  const p=String(v).replace(/^v/,"").split(".").map(n=>parseInt(n,10)||0);
+  return (p[0]||0)*10000 + (p[1]||0)*100 + (p[2]||0);
+}
+async function checkUpdate(){
+  try{
+    const base=location.href.split("?")[0].split("#")[0];
+    const res=await fetch(base+"?cb="+Date.now(), {cache:"no-store"});
+    if(!res.ok) return;
+    const txt=await res.text();
+    const m=txt.match(/APP_VERSION = "([^"]+)"/);
+    if(!m) return;
+    const latest=m[1];
+    if(verNum(latest) > verNum(APP_VERSION)){
+      $("updateMsg").textContent="新しいバージョン "+latest+" があります（今お使いのものは "+APP_VERSION+"）。";
+      $("updateBar").classList.remove("hidden");
+      $("updateBtn").onclick=()=>{ location.replace(base+"?v="+encodeURIComponent(latest)); };
+    }
+  }catch(e){ /* オフライン時などは何もしない */ }
+}
+checkUpdate();
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") checkUpdate(); });
 const tabsEl=$("tabs");
 EXERCISES.forEach((ex,i)=>{
   const b=document.createElement("button");
