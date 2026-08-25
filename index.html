@@ -25,6 +25,16 @@
   .mora.active{background:var(--accent); color:#fff; border-color:var(--accent);}
   .mora.hard{border-color:var(--accent); color:var(--accent);}
   .mora.hard.active{color:#fff;}
+  .mora.seq{font-weight:700;}
+  .pace{display:none; gap:7px; justify-content:center; margin:10px 0 0;}
+  .pace.on{display:flex;}
+  .pace span{width:42px; height:42px; line-height:42px; text-align:center; border-radius:10px;
+    background:#f0eeea; color:var(--sub); font-size:18px; font-weight:700;
+    transition:background .07s linear, color .07s linear;}
+  .pace span.hit{background:var(--accent); color:#fff;}
+  .countdown{display:none; text-align:center; font-size:13px; color:var(--accent);
+    font-variant-numeric:tabular-nums; margin-top:6px; font-weight:700;}
+  .countdown.on{display:block;}
   canvas.viz{width:100%; height:110px; background:#141414; border-radius:8px; display:block;}
   .live{display:flex; gap:16px; margin:10px 0; font-size:13px; color:var(--sub);}
   .live b{color:var(--ink); font-size:16px; font-variant-numeric:tabular-nums;}
@@ -81,6 +91,8 @@
   <div class="ex-desc" id="exDesc"></div>
   <div class="moras hidden" id="moraRow"></div>
   <canvas class="viz" id="viz"></canvas>
+  <div class="pace" id="paceRow"></div>
+  <div class="countdown" id="countdown"></div>
   <div class="live">
     <span>音程 <b id="livePitch">–</b></span>
     <span>音量 <b id="liveLevel">–</b></span>
@@ -160,9 +172,10 @@
 <script>
 "use strict";
 /* ================= バージョン ================= */
-const APP_VERSION = "v1.8.0";
-const APP_DATE    = "2026-08-22";
+const APP_VERSION = "v1.9.0";
+const APP_DATE    = "2026-08-25";
 const CHANGELOG = [
+  ["v1.9.0","2026-08-25","「Kの子音」に カキクケコ連続10秒 を追加し、これを既定に（10秒の自動停止とテンポの目安つき／母音の色から並びの位相を推定して、キの摩擦だけを取り出して採点）"],
   ["v1.8.0","2026-08-22","「Kの子音」に カ・キ・ク・ケ・コ の個別練習を追加（モーラごとの基準で採点／破裂後の摩擦を新たに測定／直近の他モーラとの比較表）"],
   ["v1.7.0","2026-08-22","「Kの子音」を全面的に作り直し（閉鎖の深さ・破裂後の気息を新たに測定／破裂波形の拡大表示を追加）"],
   ["v1.6.0","2026-08-13","更新チェックを追加（新しい版が出たら画面上部で知らせます）"],
@@ -180,7 +193,7 @@ const EXERCISES = [
  {id:"roll", name:"2. 巻き舌", desc:"「ルルルル ラルルル ルルルル リルルル レルルル ロルルル るるるるる」。舌の震えの規則性と持続を測ります。"},
  {id:"tongue", name:"3. 舌出し「あえあえ」", desc:"まず①舌を出さずに「あえあえあえ」を録音 → 次に②舌を出して同じように録音。2つの響き（音色）がどれだけ近いかを採点します。"},
  {id:"nine", name:"4. にねなのぬのなねに", desc:"鼻腔の響きを保ったまま、切れ目なくなめらかに。音のつながりと音量の均一さを測ります。"},
- {id:"k", name:"5. Kの子音", desc:"下から練習する音を選び、1秒ほど間隔をあけて5回はっきり発音します。マイクから10cmほど離してください。"},
+ {id:"k", name:"5. Kの子音", desc:"下から練習の種類を選びます。マイクから10cmほど離してください。"},
  {id:"cv", name:"6. 子音＋母音（母音を強く）", desc:"「カ・キ・ク・ケ・コ」などを、母音をしっかり張って発音。母音の音圧と響きの安定を測ります。"},
  {id:"stac", name:"7. あっいっうっえっおっ", desc:"5つの音を歯切れよく区切って発音。粒の数・間隔の均一さ・音量のそろい方を測ります。"},
 ];
@@ -190,7 +203,20 @@ const EXERCISES = [
    「イ」「ウ」のような狭母音の前では口の中の隙間が狭くなり、破裂の直後に摩擦が生じやすく、
    VOT も長くなる。とくに「キ」は閉鎖が硬口蓋寄りになるため [ç]（ヒの子音）に化けやすい。
    すべて同じ基準で採点すると「キ」「ク」が不当に低くなるので、モーラごとに目標値を変える。 */
+/* v1.9.0：連続練習を先頭に置き、これを既定のモードにする。
+   単発のモーラ別練習（v1.8.0）は、崩れた音を1つずつ切り出して直すときのために残してある。 */
+const SEQ_SEC = 10;        // 発声する長さ
+const SEQ_BEAT_MS = 400;   // テンポの目安（2.5モーラ/秒＝10秒でちょうど5周）
+const SEQ_MORA_LABEL = ["カ","キ","ク","ケ","コ"];
+const SEQ_VOT_GOOD   = [35, 50, 55, 35, 35];   // モーラごとのVOT目標（ms）
+const SEQ_VOT_BAD    = [95,120,125, 95, 95];   // ここまで来ると0点
+/* ア・イ・ウ・エ・オ の「高域寄り度」の目安（高域/低域エネルギー比の log10）。
+   イとエは F2 が高いので高域寄り、ウとオは低い。絶対値ではなく5つの相対関係だけを使う。 */
+const SEQ_TONE_TEMPLATE = [0.05, 0.95, -0.20, 0.70, -0.60];
 const K_MORAS = [
+  {id:"seq", label:"カキクケコ 連続10秒", short:"連続10秒", seq:true,
+   tip:"「カ・キ・ク・ケ・コ」を止めずに10秒くり返します。下の目安の点灯に合わせて、"
+      +"速さを変えずに一粒ずつ子音を立ててください。10秒たつと自動で止まります。"},
   {id:"kq", label:"クッ（単独）", short:"クッ", vowel:null, votGood:35,  votBad:125,
    tip:"舌の奥を軟口蓋に押しつけ、2秒ためてから一気に開放。声は出しません。"},
   {id:"ka", label:"カ", short:"カ", vowel:"a", votGood:35, votBad:85,
@@ -266,18 +292,28 @@ EXERCISES.forEach((ex,i)=>{
 const moraRow=$("moraRow");
 K_MORAS.forEach(mo=>{
   const b=document.createElement("button");
-  b.className="mora"+(mo.hard?" hard":"")+(mo.id===currentMora.id?" active":"");
+  b.className="mora"+(mo.hard?" hard":"")+(mo.seq?" seq":"")+(mo.id===currentMora.id?" active":"");
   b.textContent=mo.short;
   b.dataset.mora=mo.id;
   b.onclick=()=>selectMora(mo);
   moraRow.appendChild(b);
+});
+/* テンポの目安（連続モードのみ）。音を鳴らすとマイクに入って破裂の検出を汚すので、表示だけにする */
+SEQ_MORA_LABEL.forEach(ch=>{
+  const s=document.createElement("span"); s.textContent=ch; $("paceRow").appendChild(s);
 });
 function selectMora(mo){
   if(recording) stopRecording(true);
   currentMora=mo;
   try{ localStorage.setItem("vt_kmora",mo.id); }catch(e){}
   moraRow.querySelectorAll(".mora").forEach(b=>b.classList.toggle("active", b.dataset.mora===mo.id));
-  $("exDesc").textContent = currentEx.desc + "　【" + mo.label + "】" + mo.tip;
+  $("exDesc").textContent = (mo.seq
+      ? "「カ・キ・ク・ケ・コ」を10秒間つづけて発音します。"
+      : "1秒ほど間隔をあけて5回はっきり発音します。")
+    + "マイクから10cmほど離してください。　【" + mo.label + "】" + mo.tip;
+  $("paceRow").classList.toggle("on", !!mo.seq);
+  $("paceRow").querySelectorAll("span").forEach(s=>s.classList.remove("hit"));
+  $("countdown").classList.remove("on");
   $("resultCard").classList.add("hidden");
   drawChart();
 }
@@ -301,7 +337,12 @@ function selectEx(ex,btn){
   $("cmpBox").classList.add("hidden");
   $("recBtn").textContent = ex.id==="tongue" ? "① 舌なしで録音" : "録音スタート";
   if(ex.id==="k"){ moraRow.classList.remove("hidden"); selectMora(currentMora); }
-  else { moraRow.classList.add("hidden"); drawChart(); }
+  else {
+    moraRow.classList.add("hidden");
+    $("paceRow").classList.remove("on");
+    $("countdown").classList.remove("on");
+    drawChart();
+  }
 }
 selectEx(currentEx,document.querySelector(".tab"));
 
@@ -394,15 +435,45 @@ function startRecording(btn){
       return;
     }
   }
+  if(isSeqMode()) startPace();
   tickTime();
+}
+/* ---- 連続モード：テンポの目安と10秒の自動停止 ---- */
+function isSeqMode(){ return currentEx.id==="k" && currentMora.seq; }
+let paceTimer=null;
+function startPace(){
+  stopPace();
+  const cells=$("paceRow").querySelectorAll("span");
+  $("paceRow").classList.add("on");
+  $("countdown").classList.add("on");
+  let k=0;
+  const beat=()=>{
+    cells.forEach((c,i)=>c.classList.toggle("hit", i===(k%5)));
+    k++;
+  };
+  beat();
+  paceTimer=setInterval(beat, SEQ_BEAT_MS);
+}
+function stopPace(){
+  if(paceTimer){ clearInterval(paceTimer); paceTimer=null; }
+  $("paceRow").querySelectorAll("span").forEach(s=>s.classList.remove("hit"));
+  $("countdown").classList.remove("on");
 }
 function tickTime(){
   if(!recording) return;
-  $("liveTime").textContent=((performance.now()-recStart)/1000).toFixed(1)+"s";
+  const el=(performance.now()-recStart)/1000;
+  $("liveTime").textContent=el.toFixed(1)+"s";
+  if(isSeqMode()){
+    const left=Math.max(0, SEQ_SEC-el);
+    $("countdown").textContent = left>0 ? "残り "+left.toFixed(1)+"秒" : "終わりです（停止中…）";
+    // 末尾が切れると最後の1粒を落とすので、0.4秒だけ余分に録ってから止める
+    if(el >= SEQ_SEC+0.4){ stopRecording(); return; }
+  }
   setTimeout(tickTime,100);
 }
 async function stopRecording(silent){
   recording=false;
+  stopPace();
   if(activeBtn){ activeBtn.classList.remove("rec"); }
   if(currentEx.id==="tongue"){ $("recBtn").textContent="① 舌なしで録音"; $("recBtnB").textContent="② 舌出しで録音"; }
   else $("recBtn").textContent="録音スタート";
@@ -775,6 +846,303 @@ function analyzeK(buf, mora){
   return {closeScore,sharpScore,votScore,fricScore,evenScore,
           riseMs,excessDb,votMs,fricDb,ivCv,count:ev.length,detail:det};
 }
+/* ========== Kの子音：カキクケコ連続10秒 の解析（v1.9.0） ==========
+   単発練習の検出は「1秒ほど間隔が空く」ことを前提にしていたので、0.4秒間隔で並ぶ
+   連続発話には使えない。ここでは次の順で解く。
+
+     ① 1ms 包絡の「立ち上がりの急峻さ」で破裂を拾い、直前が閉鎖（無音）になっている
+        ものだけ残す。母音のほうが破裂より大きいので、絶対レベルでは拾えない
+     ② 破裂ごとに 立ち上がり／閉鎖の深さ／VOT／破裂後の摩擦 を測る
+     ③ 直後の母音の「高域/低域エネルギー比」を測り、5つ周期のどの位相が
+        カキクケコ に一番合うかを相関で決める
+
+   ③ が要点。位相が決まれば「何番目がキか」が分かるので、本人の課題である
+   キの摩擦だけを取り出して、基準となるカとの差で語れる。
+   連続発話ではモーラを1つずつ選べないため、この推定なしにはキを分離できない。 */
+
+function pearson(a,b){
+  const ma=mean(a), mb=mean(b);
+  let d=0,na=0,nb=0;
+  for(let i=0;i<a.length;i++){ d+=(a[i]-ma)*(b[i]-mb); na+=(a[i]-ma)*(a[i]-ma); nb+=(b[i]-mb)*(b[i]-mb); }
+  return d/Math.sqrt((na*nb)||1);
+}
+/* 母音の「高域寄り度」：1700〜3400Hz と 300〜1100Hz のエネルギー比（log10） */
+function toneRatio(buf, start, len){
+  const N=1024;
+  if(start<0 || len<N || start+N>buf.length) return null;
+  const re=new Float32Array(N), im=new Float32Array(N);
+  const k=f=>Math.max(1,Math.min(N/2-1,Math.round(f*N/sr)));
+  const kL0=k(300), kL1=k(1100), kH0=k(1700), kH1=k(3400);
+  let lo=0, hi=0, frames=0;
+  for(let f=0; f<3; f++){
+    const off=start+f*Math.floor(N/2);
+    if(off+N>buf.length || off+N>start+len) break;
+    for(let j=0;j<N;j++){ re[j]=buf[off+j]*(0.5-0.5*Math.cos(2*Math.PI*j/N)); im[j]=0; }
+    fft(re,im);
+    for(let b=kL0;b<kL1;b++) lo+=Math.hypot(re[b],im[b]);
+    for(let b=kH0;b<kH1;b++) hi+=Math.hypot(re[b],im[b]);
+    frames++;
+  }
+  if(!frames || lo<=0) return null;
+  return Math.log10((hi+1e-9)/(lo+1e-9));
+}
+
+function analyzeKSeq(buf){
+  const hop=Math.max(1,Math.round(sr*0.001)), win=Math.max(8,Math.round(sr*0.005));
+  const env=[];
+  for(let i=0;i+win<=buf.length;i+=hop){
+    let s=0; for(let j=i;j<i+win;j++) s+=buf[j]*buf[j];
+    env.push(Math.sqrt(s/win));
+  }
+  const dt=hop/sr, N=env.length;
+  if(N<1200) return null;                       // 1.2秒未満は連続練習とみなさない
+  const sorted=env.slice().sort((a,b)=>a-b);
+  const q=p=>sorted[Math.max(0,Math.min(N-1,Math.round(p*(N-1))))];
+  const floor=Math.max(q(0.05),1e-6);
+  let peak=0; for(const v of env) if(v>peak) peak=v;
+
+  /* --- ① 破裂の検出 --- */
+  /* 破裂を「大きい立ち上がり」で拾うと、母音の始まり（気息のあと声が立つところ）も
+     同じくらい大きな段差なので二重に取れてしまう。そこで
+       (a) まずオンセット関数の自己相関でモーラの周期を出し、
+       (b) その周期の6割を最小間隔にして1モーラ1個だけ拾い、
+       (c) 拾った点から「直前のいちばん静かな点＝閉鎖」までさかのぼって、
+           そこから最初に立ち上がるところを破裂とする。
+     閉鎖を起点にすることで、破裂と母音の始まりを取り違えなくなる。 */
+  const D=Math.max(1,Math.round(0.006/dt));      // 6ms前との差で立ち上がりを見る
+  const G=Math.max(1,Math.round(0.005/dt));      // オンセット関数は5msグリッド
+  const on=[];
+  for(let i=0;i<N;i+=G){
+    let mx=0;
+    for(let j=Math.max(i,D); j<Math.min(N,i+G); j++){ const d2=env[j]-env[j-D]; if(d2>mx) mx=d2; }
+    on.push(mx);
+  }
+  const om=mean(on), oc=on.map(v=>v-om);
+  let e0=0; for(const v of oc) e0+=v*v;
+  let bestLag=0, bestAc=0;
+  const loLag=20, hiLag=Math.min(120, Math.floor(oc.length/3));   // 0.10〜0.60秒
+  for(let lag=loLag; lag<=hiLag; lag++){
+    let s=0; for(let i=0;i+lag<oc.length;i++) s+=oc[i]*oc[i+lag];
+    const r=e0>0? s/e0 : 0;
+    if(r>bestAc){ bestAc=r; bestLag=lag; }
+  }
+  if(bestLag>=loLag*2){                          // 倍の周期を拾っていないか確かめる
+    const half=Math.round(bestLag/2);
+    let s=0; for(let i=0;i+half<oc.length;i++) s+=oc[i]*oc[i+half];
+    if(e0>0 && s/e0 > bestAc*0.72) bestLag=half;
+  }
+  const T = bestLag ? bestLag*0.005 : 0.35;      // 推定したモーラ周期（秒）
+  const minGap=Math.max(Math.round(0.075/dt), Math.round(T*0.60/dt));
+
+  const cands=[];
+  for(let i=1;i<on.length-1;i++){
+    if(on[i]>=on[i-1] && on[i]>=on[i+1] && on[i]>peak*0.04) cands.push({i:i*G, jump:on[i]});
+  }
+  cands.sort((a,b)=>b.jump-a.jump);
+  const taken=[];
+  for(const c of cands){
+    let ok=true;
+    for(let t=0;t<taken.length;t++){ if(Math.abs(taken[t]-c.i)<minGap){ ok=false; break; } }
+    if(ok) taken.push(c.i);
+  }
+  taken.sort((a,b)=>a-b);
+
+  const backT=Math.max(1,Math.round(T*0.75/dt));
+  const raw=[];
+  for(const t0 of taken){
+    // (c) 直前の閉鎖（いちばん静かな点）まで戻る
+    const lo=Math.max(0, t0-backT);
+    let mi=lo, mv=env[lo];
+    for(let j=lo;j<=t0;j++) if(env[j]<mv){ mv=env[j]; mi=j; }
+    const hiEnd=Math.min(N-1, t0+Math.round(0.012/dt));
+    let hiV=0; for(let j=mi;j<=hiEnd;j++) if(env[j]>hiV) hiV=env[j];
+    const gate=Math.max(mv+(hiV-mv)*0.15, floor*2.5);
+    let onIdx=t0;
+    for(let j=mi;j<=t0;j++){ if(env[j]>=gate){ onIdx=j; break; } }
+    // 開放から12ms以内の頂点が破裂
+    let pi=onIdx, bp=env[onIdx];
+    for(let j=onIdx;j<Math.min(N,onIdx+Math.round(0.012/dt));j++) if(env[j]>bp){ bp=env[j]; pi=j; }
+    if(bp < floor*3) continue;
+    // 立ち上がり 10%→90%
+    let t90=pi;
+    for(let j=pi;j>=onIdx;j--){ if(env[j]<bp*0.9){ t90=j+1; break; } t90=j; }
+    let t10=t90;
+    for(let j=t90;j>=onIdx;j--){ if(env[j]<bp*0.1){ t10=j+1; break; } t10=j; }
+    // 閉鎖の深さ：開放の直前 60ms の、静かな側 25%
+    const ce=Math.max(0, t10-Math.round(0.004/dt));
+    const cs=Math.max(0, Math.max(mi-Math.round(0.030/dt), ce-Math.round(0.060/dt)));
+    let cl=mv;
+    if(ce-cs>=8){
+      const seg=env.slice(cs,ce).sort((a,b)=>a-b);
+      cl=seg[Math.round(seg.length*0.25)];
+    }
+    cl=Math.max(cl,1e-6);
+    raw.push({pi, bp, onIdx:t10, cs, ce, cl,
+              rise:Math.max(0,(t90-t10))*dt*1000});
+  }
+  raw.sort((a,b)=>a.pi-b.pi);
+  // 閉鎖へさかのぼった結果、同じ破裂に落ちたものを1つにまとめる
+  const bursts=[];
+  for(const b of raw){
+    const prev=bursts[bursts.length-1];
+    if(prev && b.pi-prev.pi < minGap*0.5){ if(b.bp>prev.bp) bursts[bursts.length-1]=b; continue; }
+    bursts.push(b);
+  }
+  if(bursts.length<5) return null;
+
+  /* 暗騒音の基準を、録音の「話していない部分」から取り直す。
+     単発練習では1秒ずつ間が空くので録音全体の下位5%がそのまま暗騒音だったが、
+     連続10秒には無音の区間がない。閉鎖中ずっと息が漏れていると、その息漏れ自体が
+     最小値になってしまい「閉鎖は完璧」と誤判定する。そこで、
+     録音開始から最初の破裂まで（構えている間）と、最後の声のあとの余韻を基準にする。 */
+  const amb=[];
+  const preEnd=bursts[0].onIdx-Math.round(0.020/dt);
+  if(preEnd>Math.round(0.100/dt)) for(let i=0;i<preEnd;i++) amb.push(env[i]);
+  const tailStart=Math.min(N, bursts[bursts.length-1].pi+Math.round(0.350/dt));
+  if(N-tailStart>Math.round(0.100/dt)) for(let i=tailStart;i<N;i++) amb.push(env[i]);
+  let ambient, ambientOk=false;
+  if(amb.length>=Math.round(0.100/dt)){
+    amb.sort((a,b)=>a-b);
+    ambient=Math.max(amb[Math.round(amb.length*0.50)],1e-6);
+    ambientOk=true;
+  }else{
+    ambient=Math.max(q(0.02),1e-6);   // 取れなければ従来どおり（参考値）
+  }
+  bursts.forEach(b=>{ b.excess=20*Math.log10(b.cl/ambient); });
+
+  /* --- ② 声の開始（VOT）。8kHzに落としてから探す（等倍だと10秒分では重すぎる） --- */
+  const dec=Math.max(1, Math.round(sr/8000)), dsr=sr/dec;
+  const ds=new Float32Array(Math.floor(buf.length/dec));
+  for(let i=0;i<ds.length;i++){
+    let s=0; for(let j=0;j<dec;j++){ const k2=i*dec+j; s += k2<buf.length? buf[k2] : 0; }
+    ds[i]=s/dec;                                  // 粗いローパスを兼ねる
+  }
+  const vstep=Math.max(1,Math.round(dsr*0.005)), vwin=Math.max(16,Math.round(dsr*0.024));
+  const vflag=[];
+  for(let s0=0; s0+vwin<=ds.length; s0+=vstep) vflag.push(autocorrPitch(ds.subarray(s0,s0+vwin),dsr)>0);
+  const envIdxOfV=j=>Math.round(j*0.005/dt);
+  const vIdxOfEnv=i=>Math.round(i*dt/0.005);
+
+  bursts.forEach((b,k)=>{
+    const nextPi = (k+1<bursts.length) ? bursts[k+1].pi : N;
+    const limit  = Math.min(b.pi+Math.round(0.16/dt), Math.max(b.pi+Math.round(0.03/dt), nextPi-Math.round(0.015/dt)));
+    let vi=-1;
+    for(let j=vIdxOfEnv(b.pi+Math.round(0.004/dt)); j+1<vflag.length; j++){
+      if(envIdxOfV(j) > limit) break;
+      if(vflag[j] && vflag[j+1]){ vi=envIdxOfV(j); break; }   // 2フレーム続いたら声の開始
+    }
+    b.vi = vi;
+    b.vot = vi>=0 ? Math.max(0,(vi-b.pi))*dt*1000 : null;
+    // 破裂後の摩擦：破裂と声の間に残っている息の音（破裂ピーク比）
+    if(vi>=0){
+      const a=b.pi+Math.round(0.008/dt), c=vi-Math.round(0.003/dt);
+      b.fric = (c-a>=4) ? 20*Math.log10(Math.max(mean(env.slice(a,c)),1e-6)/b.bp) : null;
+    }else b.fric=null;
+    // 母音の色（声の開始から次の破裂の手前まで）
+    if(vi>=0){
+      const vs=vi*hop, ve=Math.min(buf.length, (nextPi-Math.round(0.020/dt))*hop);
+      b.tone = toneRatio(buf, vs, Math.max(0, ve-vs));
+    }else b.tone=null;
+  });
+
+  /* --- ③ カキクケコ のどの位相かを、母音の色から決める --- */
+  let bestP=0, bestR=-2;
+  const toned=bursts.filter(b=>b.tone!==null);
+  if(toned.length>=8){
+    for(let p=0;p<5;p++){
+      const g=[];
+      let full=true;
+      for(let m=0;m<5;m++){
+        const vals=[];
+        bursts.forEach((b,i)=>{ if(b.tone!==null && ((i+p)%5)===m) vals.push(b.tone); });
+        if(!vals.length){ full=false; break; }
+        g.push(mean(vals));
+      }
+      if(!full) continue;
+      const r=pearson(g, SEQ_TONE_TEMPLATE);
+      if(r>bestR){ bestR=r; bestP=p; }
+    }
+  }
+  const aligned = bestR>=0.35;                   // これ未満は位相を信用しない
+  bursts.forEach((b,i)=>{ b.mora=(i+bestP)%5; });
+
+  /* --- 集計 --- */
+  const iv=[]; for(let i=1;i<bursts.length;i++) iv.push((bursts[i].pi-bursts[i-1].pi)*dt);
+  const ivMean=mean(iv), ivCv= iv.length>=2 ? Math.round(stdev(iv)/ivMean*100) : 0;
+  const rate = ivMean>0 ? 1/ivMean : 0;
+  const span = (bursts[bursts.length-1].pi-bursts[0].pi)*dt + ivMean;
+
+  const riseMs=mean(bursts.map(b=>b.rise));
+  const excessDb=mean(bursts.map(b=>b.excess));
+  const vots=bursts.map(b=>b.vot).filter(v=>v!==null);
+  const votMs= vots.length? mean(vots) : null;
+  // VOTはモーラごとに目標が違うので、1粒ずつ自分の目標で採点してから平均する
+  const votScores=[];
+  bursts.forEach(b=>{
+    if(b.vot===null) return;
+    const g=SEQ_VOT_GOOD[b.mora], bad=SEQ_VOT_BAD[b.mora];
+    votScores.push(clamp(100-Math.max(0,b.vot-g)*(100/Math.max(10,bad-g))));
+  });
+
+  const byMora=[0,1,2,3,4].map(m=>{
+    const g=bursts.filter(b=>b.mora===m);
+    const v=g.map(b=>b.vot).filter(x=>x!==null);
+    const f=g.map(b=>b.fric).filter(x=>x!==null);
+    return {n:g.length, vot:v.length?Math.round(mean(v)):null, fric:f.length?Math.round(mean(f)):null};
+  });
+  const fricKi=byMora[1].fric, fricKa=byMora[0].fric;
+  const fricAll=bursts.map(b=>b.fric).filter(x=>x!==null);
+
+  const durScore  = clamp(span/SEQ_SEC*100);
+  const tempoScore= iv.length>=2 ? clamp(100-Math.max(0,ivCv-8)*3) : 0;
+  const closeScore= clamp(100-Math.max(0,excessDb-3)*8);
+  const sharpScore= clamp(100-Math.max(0,riseMs-5)*5);
+  const votScore  = votScores.length? Math.round(mean(votScores)) : 0;
+  // キが取れなければ全モーラの平均で代用する（位相が決まらなかったときの保険）
+  const fricRef   = (aligned && fricKi!==null) ? fricKi
+                  : (fricAll.length? Math.round(mean(fricAll)) : null);
+  const fricScore = fricRef===null ? null : clamp(100-(fricRef+22)*5);
+  const vowelScore= toned.length>=8 ? clamp((bestR-0.1)/0.75*100) : 0;
+
+  let score;
+  if(fricScore===null){
+    score=Math.round(durScore*0.20+tempoScore*0.16+closeScore*0.16+sharpScore*0.10+votScore*0.33+vowelScore*0.05);
+  }else{
+    score=Math.round(durScore*0.18+tempoScore*0.14+closeScore*0.14+sharpScore*0.09+votScore*0.20+fricScore*0.20+vowelScore*0.05);
+  }
+
+  // 拡大表示は「キ」を優先する（本人の課題だから）
+  let dref=bursts.find(b=>b.mora===1) || bursts[0];
+  const detail={env, dt, pi:dref.pi, onIdx:dref.onIdx, cs:dref.cs, ce:dref.ce,
+                endIdx: dref.vi>=0? dref.vi : dref.pi+Math.round(0.06/dt),
+                bp:dref.bp, vi:dref.vi};
+
+  return {score, durScore, tempoScore, closeScore, sharpScore, votScore, fricScore, vowelScore,
+          span, count:bursts.length, rate, ivCv, riseMs, excessDb, votMs, ambientOk,
+          fricKi, fricKa, fricRef, byMora, aligned, corr:bestR,
+          detailMora: dref.mora, detail};
+}
+
+/* この回のモーラ別内訳（連続モードの結果表示に使う） */
+function renderSeqTable(r){
+  const box=$("cmpBox");
+  let html="<b>この10秒のモーラ別</b>";
+  if(!r.aligned) html+="<span style='color:var(--accent)'>（並びを特定できませんでした。参考値です）</span>";
+  html+="<table><tr><th>音</th><th>回数</th><th>VOT</th><th>摩擦</th></tr>";
+  r.byMora.forEach((b,m)=>{
+    html+="<tr><td>"+SEQ_MORA_LABEL[m]+"</td><td>"+b.n+"</td>"
+        + "<td>"+(b.vot==null?"–":b.vot+"ms")+"</td>"
+        + "<td>"+(b.fric==null?"–":b.fric+"dB")+"</td></tr>";
+  });
+  html+="</table>";
+  if(r.aligned && r.fricKi!==null && r.fricKa!==null){
+    const d=r.fricKi-r.fricKa;
+    html+="<div style='margin-top:5px;color:var(--accent)'>キとカの摩擦の差 "+d.toFixed(0)
+        +"dB"+(d>6?"（キで息が漏れています）":"（よく揃っています）")+"</div>";
+  }
+  box.innerHTML=html; box.classList.remove("hidden");
+}
+
 function drawKDetail(d){
   const c=$("kviz"); c.classList.remove("hidden");
   const ctx=c.getContext("2d");
@@ -812,7 +1180,8 @@ function renderMoraCompare(){
   const box=$("cmpBox");
   const h=loadHist().filter(x=>x.k);
   if(h.length<2){ box.classList.add("hidden"); return; }
-  const rows=K_MORAS.map(mo=>{
+  // 連続10秒は測り方が違うので、単発モーラの比較表には混ぜない
+  const rows=K_MORAS.filter(mo=>!mo.seq).map(mo=>{
     const r=h.filter(x=>x.k===mo.id).slice(-3);
     if(!r.length) return null;
     return [mo.short, Math.round(mean(r.map(x=>x.s))), r[r.length-1].vot, r[r.length-1].fric];
@@ -829,13 +1198,68 @@ function renderMoraCompare(){
 }
 
 /* ================= 採点 ================= */
+/* 連続10秒モードの採点。共通解析（analyzeBuffer）は10秒分だと重いので通さない */
+function evaluateKSeq(buf, m, advice){
+  const r=analyzeKSeq(buf);
+  if(!r){
+    alert("破裂音を十分に検出できませんでした。\n\n「カ・キ・ク・ケ・コ」を止めずに10秒くり返してください。"
+         +"\n・子音をはっきり立てる（母音だけ流さない）\n・マイクから10cmほど離す\n・下の目安の点灯に合わせる");
+    return;
+  }
+  resultLabel="Kの子音（カキクケコ連続）";
+  m.push(["10秒つづいたか",r.durScore,r.span.toFixed(1)+"秒・"+r.count+"モーラ"]);
+  m.push(["テンポの安定",r.tempoScore,r.rate.toFixed(1)+"モーラ/秒・ばらつき "+r.ivCv+"%"]);
+  const sgn=v=>(v>=0?"+":"")+v.toFixed(0);   // 連続モードは暗騒音を下回ることがある
+  m.push(["閉鎖の深さ（息の止め）",r.closeScore,
+          "暗騒音 "+sgn(r.excessDb)+"dB"+(r.ambientOk?"":"（参考値）")]);
+  m.push(["破裂の鋭さ",r.sharpScore,"立ち上がり "+r.riseMs.toFixed(0)+"ms"]);
+  m.push(["声までの速さ（VOT）",r.votScore,
+          (r.votMs===null?"–":"平均 "+r.votMs.toFixed(0)+"ms")
+          +(r.byMora[1].vot!=null?"（キ "+r.byMora[1].vot+"ms）":"")]);
+  if(r.fricScore!==null){
+    m.push([(r.aligned?"キの摩擦の少なさ":"破裂後の摩擦の少なさ"), r.fricScore,
+            "残り "+r.fricRef+"dB"+(r.aligned&&r.fricKa!=null?"（カ "+r.fricKa+"dB）":"")]);
+  }
+  m.push(["母音の描き分け",r.vowelScore,"カキクケコの区別 "+Math.round(Math.max(0,r.corr)*100)+"%"]);
+  const score=r.score;
+
+  // --- アドバイス（原因別） ---
+  if(r.durScore<80) advice.push("10秒つづいていません（"+r.span.toFixed(1)+"秒）。途中で息継ぎのために止まっているはずです。1周ごとに吸うのではなく、始める前に深く吸って、少ない息で最後まで運びましょう。");
+  if(r.tempoScore<60) advice.push("速さがばらついています（間隔のばらつき "+r.ivCv+"%）。画面の点灯に合わせて、どの粒も同じ長さに揃えてください。");
+  if(r.closeScore<60) advice.push("破裂の前に息が漏れています（閉鎖が暗騒音より "+Math.round(r.excessDb)+"dB 高い）。連続で速くすると閉鎖が浅くなりがちです。一度ゆっくりに落として、毎回きちんと舌で止めてから開放してください。");
+  if(!r.ambientOk) advice.push("録音の頭とお尻に無音がありませんでした。閉鎖の深さは参考値です。次からは「録音スタート」を押して1秒ほど待ってから声を出すと、正確に測れます。");
+  if(r.fricScore!==null && r.fricScore<60){
+    advice.push(r.aligned
+      ? "キのあとに摩擦音（「ヒ」のような息）が残っています（残り "+r.fricRef+"dB）。舌先ではなく舌の「中央」を硬口蓋に広く当て、開放と同時に「イ」の声を始めてください。"
+      : "破裂のあとに摩擦音が残っています（残り "+r.fricRef+"dB）。開放と同時に声帯を鳴らし始めてください。息だけが先行しています。");
+  }
+  if(r.aligned && r.fricKi!==null && r.fricKa!==null && (r.fricKi-r.fricKa)>6)
+    advice.push("キだけカより "+(r.fricKi-r.fricKa).toFixed(0)+"dB 息が多く残っています。カ→キを交互にゆっくり5回ずつ言って、崩れる瞬間をつかんでから連続に戻すと直りやすいです。");
+  if(r.votScore<60) advice.push("破裂から声までが遅れています"+(r.votMs===null?"":"（平均 "+r.votMs.toFixed(0)+"ms）")+"。子音と母音を別々に出さず、ひとつの動作にまとめましょう。");
+  if(r.sharpScore<60) advice.push("開放が緩やかです（立ち上がり "+r.riseMs.toFixed(0)+"ms）。溜めた圧を一瞬で全部離すイメージで。");
+  if(r.vowelScore<50) advice.push("カキクケコの母音が似た音になっています。速さより口の形を優先して、イは横に、ウとオは奥で、はっきり描き分けてください。");
+  if(r.count<15) advice.push("10秒で "+r.count+"モーラでした。まずは20モーラ（1周2秒で5周）を目安に。");
+  if(!advice.length) advice.push("良い連続です。この質のまま、少しずつ速さを上げていきましょう。");
+
+  kDetail=r.detail;
+  const kStat={mora:"seq", vot:(r.votMs===null?null:Math.round(r.votMs)), fric:r.fricRef};
+  $("kcap").classList.remove("hidden");
+  $("kcap").textContent = "この10秒の中の「"+SEQ_MORA_LABEL[r.detailMora]+"」を1粒だけ拡大表示しています。"
+    + "左の帯（閉鎖）は谷が深いほど、緑の線（声の開始）までの帯が狭く低いほど、クリアなKです。";
+  showResult(score,m,advice,kStat);
+  drawKDetail(kDetail);
+  renderSeqTable(r);
+}
+
 function evaluate(buf){
-  const an=analyzeBuffer(buf);
   const m=[]; let advice=[]; let score=0;
   const ex=currentEx.id;
   kDetail=null; resultLabel=null;
   let kStat=null;
   $("cmpBox").classList.add("hidden");
+  // 連続モードは共通解析（10秒分のピッチ抽出は重い）を使わないので、先に分岐する
+  if(ex==="k" && currentMora.seq){ evaluateKSeq(buf,m,advice); return; }
+  const an=analyzeBuffer(buf);
   if(ex==="lip" || ex==="roll"){
     const dur=voicedDuration(an);
     const dScore=clamp(dur/10*100);
