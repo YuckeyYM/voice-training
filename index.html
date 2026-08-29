@@ -35,6 +35,19 @@
   .countdown{display:none; text-align:center; font-size:13px; color:var(--accent);
     font-variant-numeric:tabular-nums; margin-top:6px; font-weight:700;}
   .countdown.on{display:block;}
+  /* ウイウイ：カメラを鏡として使う */
+  .cambox{display:none; margin-top:10px;}
+  .cambox.on{display:block;}
+  .camwrap{position:relative; width:100%; max-width:340px; margin:0 auto; background:#111; border-radius:10px; overflow:hidden;}
+  .camwrap video{width:100%; display:block; transform:scaleX(-1);}
+  .camwrap .cline{position:absolute; top:0; bottom:0; left:50%; width:2px; background:rgba(255,80,80,.75);}
+  .camwrap .chint{position:absolute; left:0; right:0; bottom:6px; text-align:center; color:#fff;
+    font-size:11px; text-shadow:0 1px 3px #000;}
+  .shots{display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; justify-content:center;}
+  .shot{flex:1; min-width:100px; max-width:150px; text-align:center;}
+  .shot canvas{width:100%; border-radius:8px; background:#111; display:block;}
+  .shot span{font-size:11px; color:var(--sub); display:block; margin-top:3px;}
+  .privacy{font-size:11px; color:var(--sub); margin-top:8px; line-height:1.6;}
   canvas.viz{width:100%; height:110px; background:#141414; border-radius:8px; display:block;}
   .live{display:flex; gap:16px; margin:10px 0; font-size:13px; color:var(--sub);}
   .live b{color:var(--ink); font-size:16px; font-variant-numeric:tabular-nums;}
@@ -94,6 +107,18 @@
   <canvas class="viz" id="viz"></canvas>
   <div class="pace" id="paceRow"></div>
   <div class="countdown" id="countdown"></div>
+  <div class="cambox" id="camBox">
+    <label class="chk"><input type="checkbox" id="camChk"> カメラを鏡として使う（左右の歪みを自分の目で確かめる）</label>
+    <div id="camArea" class="hidden">
+      <div class="camwrap">
+        <video id="camVid" playsinline muted></video>
+        <div class="cline"></div>
+        <div class="chint">赤い線に鼻すじを合わせてください</div>
+      </div>
+      <div class="privacy">映像はこの端末の中だけで処理し、録画も送信もしません。「イ」が一番開いた瞬間を1枚だけ静止画にします。</div>
+    </div>
+    <div class="status" id="camStatus"></div>
+  </div>
   <div class="live">
     <span>音程 <b id="livePitch">–</b></span>
     <span>音量 <b id="liveLevel">–</b></span>
@@ -122,6 +147,12 @@
   <div class="score-big"><span id="scoreVal">–</span><small> /100</small></div>
   <canvas class="viz hidden" id="kviz" style="height:130px; margin:10px 0 4px"></canvas>
   <div class="kcap hidden" id="kcap"></div>
+  <div class="shots hidden" id="shotRow">
+    <div class="shot"><canvas id="shotOrig"></canvas><span>そのまま</span></div>
+    <div class="shot"><canvas id="shotL"></canvas><span>左半分を鏡写しに</span></div>
+    <div class="shot"><canvas id="shotR"></canvas><span>右半分を鏡写しに</span></div>
+  </div>
+  <div class="kcap hidden" id="shotCap"></div>
   <div id="metricList"></div>
   <div class="cmp hidden" id="cmpBox"></div>
   <div class="advice" id="adviceBox"></div>
@@ -173,9 +204,10 @@
 <script>
 "use strict";
 /* ================= バージョン ================= */
-const APP_VERSION = "v1.10.0";
-const APP_DATE    = "2026-08-28";
+const APP_VERSION = "v1.11.0";
+const APP_DATE    = "2026-08-29";
 const CHANGELOG = [
+  ["v1.11.0","2026-08-29","「ウイウイ」を追加（F2の行き来で口の描き分けと切り替えの速さを測定。左右の歪みは音では測れないため、カメラを鏡として使い、イが一番開いた瞬間の静止画を左右反転で見比べる方式にした。映像は端末内のみ）"],
   ["v1.10.0","2026-08-28","「腹式呼吸」を追加（ロングトーン／スーの2モード。尻すぼみをレベルの傾きとして測り、音量のゆらぎは傾きを除いた残差で評価。音程のぶら下がりも測定。レベル推移のグラフつき）"],
   ["v1.9.0","2026-08-25","「Kの子音」に カキクケコ連続10秒 を追加し、これを既定に（10秒の自動停止とテンポの目安つき／母音の色から並びの位相を推定して、キの摩擦だけを取り出して採点）"],
   ["v1.8.0","2026-08-22","「Kの子音」に カ・キ・ク・ケ・コ の個別練習を追加（モーラごとの基準で採点／破裂後の摩擦を新たに測定／直近の他モーラとの比較表）"],
@@ -199,7 +231,24 @@ const EXERCISES = [
  {id:"cv", name:"6. 子音＋母音（母音を強く）", desc:"「カ・キ・ク・ケ・コ」などを、母音をしっかり張って発音。母音の音圧と響きの安定を測ります。"},
  {id:"stac", name:"7. あっいっうっえっおっ", desc:"5つの音を歯切れよく区切って発音。粒の数・間隔の均一さ・音量のそろい方を測ります。"},
  {id:"breath", name:"8. 腹式呼吸", desc:"下から練習の種類を選びます。息を細く長く、最後まで同じ強さで。"},
+ {id:"ui", name:"9. ウイウイ", desc:"「う・い・う・い…」を10秒くり返します。イは口を大きく横に、ウはできるだけ小さくすぼめて、切り替えは一瞬で。"},
 ];
+
+/* ---- ウイウイ（v1.11.0） ----
+   イは唇を横に引くので F2 が上がり、ウは唇を丸めるので F2 が下がる。
+   この F2 の**行き来の幅**が「口の形をどれだけ描き分けられているか」にあたる。
+
+   ただし **左右の歪みは音では測れない。** 左右対称なイと少し歪んだイは
+   ほぼ同じ音になるので、対称性はカメラを鏡として使い、本人の目で見てもらう。
+   採点はしない（できないことを採点したふりをしない）。 */
+const UI_SEC = 10;          // 録音の長さ
+const UI_BEAT_MS = 400;     // テンポの目安（ウとイを400msずつ＝2.5音/秒）
+const UI_PACE = ["ウ","イ"];
+// F2 の目安（男性のおおよその値）。個人差が大きいので、絶対値より推移で見る
+const UI_I_F2_GOOD = 2200, UI_I_F2_BAD = 1600;   // イ：高いほど横に開けている
+const UI_U_F2_GOOD = 1200, UI_U_F2_BAD = 1800;   // ウ：低いほどすぼめられている
+const UI_SPREAD_GOOD = 1000, UI_SPREAD_BAD = 300; // イとウの差（Hz）
+const UI_TRANS_GOOD = 60, UI_TRANS_BAD = 220;     // 切り替え時間（ms）
 
 /* ---- 腹式呼吸：2つのモード（v1.10.0） ----
    リップロールも「持続」と「安定」を測っているが、見ているものが違う。
@@ -272,6 +321,10 @@ let lastResult=null;
 let recGain=1, recPeakDb=0; // 正規化に使った倍率と、録音時の実際のピークレベル
 let kDetail=null;           // Kの子音：波形拡大表示用のデータ
 let resultLabel=null;       // 記録に残すメニュー名（モーラ名を含む）
+// ウイウイのカメラ関連。selectEx が初期化時に stopCam() を呼ぶので、
+// **宣言はここに置く**（下の可視化セクションに置くと一時的デッドゾーンで落ちる）
+let camStream=null, camOn=false;
+let uiShot=null, uiShotScore=-1;   // 記録中の最良フレーム
 
 /* ================= UI 初期化 ================= */
 const $=id=>document.getElementById(id);
@@ -327,10 +380,13 @@ K_MORAS.forEach(mo=>{
   b.onclick=()=>selectMora(mo);
   moraRow.appendChild(b);
 });
-/* テンポの目安（連続モードのみ）。音を鳴らすとマイクに入って破裂の検出を汚すので、表示だけにする */
-SEQ_MORA_LABEL.forEach(ch=>{
-  const s=document.createElement("span"); s.textContent=ch; $("paceRow").appendChild(s);
-});
+/* テンポの目安。音を鳴らすとマイクに入って解析を汚すので、表示だけにする。
+   メニューによって文字数が変わるので、中身は setPaceCells で差し替える */
+function setPaceCells(labels){
+  const row=$("paceRow"); row.innerHTML="";
+  labels.forEach(ch=>{ const s=document.createElement("span"); s.textContent=ch; row.appendChild(s); });
+}
+setPaceCells(SEQ_MORA_LABEL);
 function selectMora(mo){
   if(recording) stopRecording(true);
   currentMora=mo;
@@ -366,6 +422,19 @@ function selectEx(ex,btn){
   $("cmpBox").classList.add("hidden");
   $("recBtn").textContent = ex.id==="tongue" ? "① 舌なしで録音" : "録音スタート";
   $("brRow").classList.add("hidden");
+  $("shotRow").classList.add("hidden");
+  $("shotCap").classList.add("hidden");
+  if(ex.id!=="ui"){ $("camBox").classList.remove("on"); stopCam(); $("camChk").checked=false; }
+  if(ex.id==="ui"){
+    moraRow.classList.add("hidden");
+    $("camBox").classList.add("on");
+    setPaceCells(UI_PACE);
+    $("paceRow").classList.add("on");
+    $("countdown").classList.remove("on");
+    drawChart();
+    return;
+  }
+  setPaceCells(SEQ_MORA_LABEL);
   if(ex.id==="k"){ moraRow.classList.remove("hidden"); selectMora(currentMora); }
   else if(ex.id==="breath"){
     moraRow.classList.add("hidden");
@@ -493,24 +562,29 @@ function startRecording(btn){
       return;
     }
   }
-  if(isSeqMode()) startPace();
+  if(isTimedMode()) startPace();
+  if(currentEx.id==="ui") startUiCapture();
   tickTime();
 }
 /* ---- 連続モード：テンポの目安と10秒の自動停止 ---- */
 function isSeqMode(){ return currentEx.id==="k" && currentMora.seq; }
+function isTimedMode(){ return isSeqMode() || currentEx.id==="ui"; }
+function timedSec(){ return currentEx.id==="ui" ? UI_SEC : SEQ_SEC; }
 let paceTimer=null;
 function startPace(){
   stopPace();
   const cells=$("paceRow").querySelectorAll("span");
+  if(!cells.length) return;
   $("paceRow").classList.add("on");
   $("countdown").classList.add("on");
+  const beatMs = currentEx.id==="ui" ? UI_BEAT_MS : SEQ_BEAT_MS;
   let k=0;
   const beat=()=>{
-    cells.forEach((c,i)=>c.classList.toggle("hit", i===(k%5)));
+    cells.forEach((c,i)=>c.classList.toggle("hit", i===(k%cells.length)));
     k++;
   };
   beat();
-  paceTimer=setInterval(beat, SEQ_BEAT_MS);
+  paceTimer=setInterval(beat, beatMs);
 }
 function stopPace(){
   if(paceTimer){ clearInterval(paceTimer); paceTimer=null; }
@@ -521,12 +595,14 @@ function tickTime(){
   if(!recording) return;
   const el=(performance.now()-recStart)/1000;
   $("liveTime").textContent=el.toFixed(1)+"s";
-  if(isSeqMode()){
-    const left=Math.max(0, SEQ_SEC-el);
+  if(isTimedMode()){
+    const lim=timedSec();
+    const left=Math.max(0, lim-el);
     $("countdown").textContent = left>0 ? "残り "+left.toFixed(1)+"秒" : "終わりです（停止中…）";
     // 末尾が切れると最後の1粒を落とすので、0.4秒だけ余分に録ってから止める
-    if(el >= SEQ_SEC+0.4){ stopRecording(); return; }
+    if(el >= lim+0.4){ stopRecording(); return; }
   }
+  if(currentEx.id==="ui") tickUiCapture();
   setTimeout(tickTime,100);
 }
 async function stopRecording(silent){
@@ -572,6 +648,88 @@ function finishRecording(buf){
   for(let i=0;i<buf.length;i++) norm[i] = buf[i]*recGain;
   $("liveLevel").textContent = recPeakDb.toFixed(0)+" dB";
   evaluate(norm);
+}
+
+/* ========== ウイウイ：カメラを鏡として使う（v1.11.0） ==========
+   左右の歪みは音に痕跡が残らないので、採点はせず本人の目で見てもらう。
+   「イ」が一番開いた瞬間を自動で1枚だけ止め、左半分・右半分それぞれを
+   鏡写しにした2枚を並べる。**この2枚が違って見えたら口が歪んでいる。**
+   顔検出は使わない（中心線に鼻すじを合わせてもらうだけで足りるため）。 */
+$("camChk").onchange = async e=>{
+  if(e.target.checked){
+    try{
+      camStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user", width:{ideal:640}}});
+      const v=$("camVid"); v.srcObject=camStream; await v.play();
+      $("camArea").classList.remove("hidden");
+      $("camStatus").textContent="";
+      camOn=true;
+      try{ localStorage.setItem("vt_cam","1"); }catch(err){}
+    }catch(err){
+      e.target.checked=false; camOn=false;
+      $("camStatus").textContent="カメラを使用できません: "+err.message;
+    }
+  }else{
+    stopCam();
+    try{ localStorage.setItem("vt_cam","0"); }catch(err){}
+  }
+};
+function stopCam(){
+  try{ if(camStream) camStream.getTracks().forEach(t=>t.stop()); }catch(e){}
+  camStream=null; camOn=false;
+  $("camArea").classList.add("hidden");
+}
+/* 録音中、いま口の形がどれだけ「イ」寄りかを実時間で見て、最大の瞬間を1枚だけ残す */
+function startUiCapture(){ uiShot=null; uiShotScore=-1; }
+function tickUiCapture(){
+  if(!camOn || !analyser) return;
+  const n=analyser.frequencyBinCount;
+  const sp=new Float32Array(n);
+  analyser.getFloatFrequencyData(sp);            // dB
+  const bin=f=>Math.max(0,Math.min(n-1,Math.round(f/(sr/2)*n)));
+  const band=(a,b)=>{ let s=0,c=0; for(let k=bin(a);k<=bin(b);k++){ s+=sp[k]; c++; } return c?s/c:-160; };
+  const lvl=band(200,3400);
+  if(lvl<-70) return;                            // 無音のときは撮らない
+  const iness=band(1800,3200)-band(600,1400);    // 高域が強いほど「イ」寄り
+  if(iness>uiShotScore){
+    uiShotScore=iness;
+    const v=$("camVid");
+    if(v.videoWidth){
+      const cv=document.createElement("canvas");
+      cv.width=v.videoWidth; cv.height=v.videoHeight;
+      const cx=cv.getContext("2d");
+      cx.translate(cv.width,0); cx.scale(-1,1);   // 鏡像にして自然に見せる
+      cx.drawImage(v,0,0);
+      uiShot=cv;
+    }
+  }
+}
+/* 撮れた1枚から、左半分／右半分それぞれの鏡写しを作って並べる */
+function renderShots(){
+  if(!uiShot){ $("shotRow").classList.add("hidden"); $("shotCap").classList.add("hidden"); return; }
+  const W=uiShot.width, H=uiShot.height;
+  const put=(id,mode)=>{
+    const c=$(id); c.width=W; c.height=H;
+    const x=c.getContext("2d");
+    if(mode==="orig"){ x.drawImage(uiShot,0,0); }
+    else if(mode==="L"){
+      x.drawImage(uiShot,0,0,W/2,H,0,0,W/2,H);
+      x.save(); x.translate(W,0); x.scale(-1,1);
+      x.drawImage(uiShot,0,0,W/2,H,0,0,W/2,H); x.restore();
+    }else{
+      x.save(); x.translate(W,0); x.scale(-1,1);
+      x.drawImage(uiShot,W/2,0,W/2,H,0,0,W/2,H); x.restore();
+      x.drawImage(uiShot,W/2,0,W/2,H,W/2,0,W/2,H);
+    }
+    // 中心線
+    x.strokeStyle="rgba(255,80,80,.7)"; x.lineWidth=Math.max(1,W/320);
+    x.beginPath(); x.moveTo(W/2,0); x.lineTo(W/2,H); x.stroke();
+  };
+  put("shotOrig","orig"); put("shotL","L"); put("shotR","R");
+  $("shotRow").classList.remove("hidden");
+  $("shotCap").classList.remove("hidden");
+  $("shotCap").innerHTML = "「イ」が一番開いた瞬間です。左半分だけで作った顔と、右半分だけで作った顔を並べています。"
+    + "<b>この2枚が違って見えるほど、口が左右に歪んでいます。</b>"
+    + "顔が中心線からずれていると差が出るので、鼻すじを線に合わせて撮り直してください。";
 }
 
 /* ================= 可視化 ================= */
@@ -1255,6 +1413,171 @@ function renderMoraCompare(){
   box.innerHTML=html; box.classList.remove("hidden");
 }
 
+/* ========== ウイウイの解析（v1.11.0） ==========
+   唇を横に引く（イ）と F2 が上がり、丸める（ウ）と F2 が下がる。
+   F2 の時間変化を追えば、口の形の描き分けと切り替えの速さがそのまま見える。
+
+   F2 は「スペクトルを平滑化してから 700〜3200Hz の最大ピークを取る」方法で推定する。
+   平滑化しないと倍音（f0の整数倍）の山を拾ってしまうので、約300Hz幅で均して
+   包絡だけを残す。LPC を使わないのは、実装量に対して精度の見返りが小さいため。 */
+
+/* 平滑化したスペクトルから F2 を推定する。取れなければ null。
+   **開いた母音（ア）には使えない。** ア は F1(750) と F2(1200) が近く、平滑化すると
+   1つの山に融合して F1 側を拾ってしまう（検証で -400Hz ずれた）。
+   このメニューが扱うイ・ウは F1 が 300〜350Hz で探索下限の 700Hz より下にあるため問題ない。
+   他のメニューに流用するときはここを確認すること。 */
+function estimateF2(buf, start, N){
+  if(start<0 || start+N>buf.length) return null;
+  const re=new Float32Array(N), im=new Float32Array(N);
+  for(let j=0;j<N;j++){ re[j]=buf[start+j]*(0.5-0.5*Math.cos(2*Math.PI*j/N)); im[j]=0; }
+  fft(re,im);
+  const half=N>>1, mag=new Float32Array(half);
+  for(let k=0;k<half;k++) mag[k]=Math.hypot(re[k],im[k]);
+  // 約300Hz幅の移動平均で倍音をならす
+  const bw=Math.max(2, Math.round(300*N/sr/2));
+  const sm=new Float32Array(half);
+  for(let k=0;k<half;k++){
+    let s=0,c=0;
+    for(let j=Math.max(0,k-bw);j<=Math.min(half-1,k+bw);j++){ s+=mag[j]; c++; }
+    sm[k]=s/c;
+  }
+  const k0=Math.max(2,Math.round(700*N/sr)), k1=Math.min(half-2,Math.round(3200*N/sr));
+  let best=-1, bv=0;
+  for(let k=k0;k<=k1;k++){
+    if(sm[k]>sm[k-1] && sm[k]>=sm[k+1] && sm[k]>bv){ bv=sm[k]; best=k; }
+  }
+  if(best<0){                                  // 明確な山が無ければ最大値で代用
+    for(let k=k0;k<=k1;k++) if(sm[k]>bv){ bv=sm[k]; best=k; }
+  }
+  if(best<0) return null;
+  // 放物線補間でビンより細かく求める
+  const y0=sm[best-1], y1=sm[best], y2=sm[best+1];
+  const d=(y0-2*y1+y2);
+  const off = d!==0 ? 0.5*(y0-y2)/d : 0;
+  return (best+off)*sr/N;
+}
+
+function analyzeUI(buf){
+  const N=1024;                                 // 約21ms窓
+  const hop=Math.max(1,Math.round(sr*0.01));    // 10msごと
+  const f2=[], tm=[], lv=[];
+  for(let i=0;i+N<=buf.length;i+=hop){
+    let s=0; for(let j=i;j<i+N;j++) s+=buf[j]*buf[j];
+    const rms=Math.sqrt(s/N);
+    lv.push(rms); tm.push(i/sr);
+    f2.push(estimateF2(buf,i,N));
+  }
+  const M=f2.length;
+  if(M<40) return null;
+
+  // 声が出ている区間だけを対象にする
+  const sortedL=lv.slice().sort((a,b)=>a-b);
+  const ql=p=>sortedL[Math.max(0,Math.min(M-1,Math.round(p*(M-1))))];
+  const thr=Math.max(ql(0.95)*0.20, ql(0.05)*3);
+  const idx=[];
+  for(let i=0;i<M;i++) if(lv[i]>thr && f2[i]!==null) idx.push(i);
+  if(idx.length<30) return null;
+
+  const vals=idx.map(i=>f2[i]);
+  const srt=vals.slice().sort((a,b)=>a-b);
+  const qv=p=>srt[Math.max(0,Math.min(srt.length-1,Math.round(p*(srt.length-1))))];
+  const hi=qv(0.85), lo=qv(0.15), mid=(hi+lo)/2;
+  if(hi-lo<120) return null;                    // 行き来がほとんど無い＝交互に言えていない
+
+  /* --- イ側・ウ側の代表値。上下15%だけを使い、遷移の途中を混ぜない --- */
+  const iVals=vals.filter(v=>v>=qv(0.80));
+  const uVals=vals.filter(v=>v<=qv(0.20));
+  const iF2=mean(iVals), uF2=mean(uVals), spread=iF2-uF2;
+
+  /* --- 切り替えの速さ：中央線を横切るたびに 10%→90% の所要時間を測る --- */
+  const loT=lo+(hi-lo)*0.1, hiT=lo+(hi-lo)*0.9;
+  const trans=[], crossT=[];
+  let prevZone = vals[0]>mid ? 1 : -1;
+  for(let k=1;k<idx.length;k++){
+    const zone = vals[k]>mid ? 1 : -1;
+    if(zone===prevZone) continue;
+    // 交差した。前後で 10%線・90%線 を通過した時刻を探す
+    let a=-1,b=-1;
+    const up = zone>0;
+    for(let j=k;j>=Math.max(0,k-25);j--){
+      const v=vals[j];
+      if(up ? v<=loT : v>=hiT){ a=j; break; }
+    }
+    for(let j=k;j<Math.min(idx.length,k+25);j++){
+      const v=vals[j];
+      if(up ? v>=hiT : v<=loT){ b=j; break; }
+    }
+    if(a>=0 && b>a){
+      const ms=(tm[idx[b]]-tm[idx[a]])*1000;
+      if(ms>0 && ms<600){ trans.push(ms); crossT.push(tm[idx[k]]); }
+    }
+    prevZone=zone;
+  }
+  const transMs = trans.length ? mean(trans) : null;
+
+  /* --- 粒のそろい：切り替えの間隔 --- */
+  const iv=[]; for(let i=1;i<crossT.length;i++) iv.push(crossT[i]-crossT[i-1]);
+  const ivCv = iv.length>=2 ? Math.round(stdev(iv)/mean(iv)*100) : 0;
+  const rate = iv.length ? 1/mean(iv) : 0;
+  const count = crossT.length;
+
+  /* --- 採点 --- */
+  const sc=(v,good,bad)=>clamp((v-bad)/(good-bad)*100);
+  const iScore     = sc(iF2, UI_I_F2_GOOD, UI_I_F2_BAD);
+  const uScore     = sc(uF2, UI_U_F2_GOOD, UI_U_F2_BAD);
+  const spreadScore= sc(spread, UI_SPREAD_GOOD, UI_SPREAD_BAD);
+  const transScore = transMs===null ? 0 : sc(transMs, UI_TRANS_GOOD, UI_TRANS_BAD);
+  /* 粒のそろいは「間隔のばらつき」だけでは足りない。ゆっくり言うほど口の形を作る
+     余裕ができて他の軸が有利になるので、目安のテンポで回数が出ているかも混ぜる */
+  const cntScore   = clamp(count/20*100);
+  const evenScore  = iv.length>=2 ? Math.round(cntScore*0.4 + clamp(100-Math.max(0,ivCv-12)*2.6)*0.6)
+                                  : cntScore;
+
+  // 描き分け（差）を主軸にする。イ・ウ単体の絶対値は声質とマイクに左右されるため軽くする
+  const score=Math.round(spreadScore*0.30+transScore*0.30+iScore*0.15+uScore*0.10+evenScore*0.15);
+
+  return {score, iScore, uScore, spreadScore, transScore, evenScore,
+          iF2, uF2, spread, transMs, ivCv, rate, count,
+          detail:{tm, f2, lv, idx, thr, hi, lo, mid}};
+}
+
+/* F2 の推移を描く。イとウの帯を背景に敷き、行き来の幅と切り替えの角度を見せる */
+function drawUIDetail(d){
+  const c=$("kviz"); c.classList.remove("hidden");
+  const ctx=c.getContext("2d");
+  const W=c.width=c.clientWidth*2, H=c.height=300;
+  ctx.fillStyle="#141414"; ctx.fillRect(0,0,W,H);
+  if(!d.idx.length) return;
+  const t0=d.tm[d.idx[0]], t1=Math.max(d.tm[d.idx[d.idx.length-1]], t0+1);
+  const yMin=Math.max(400, d.lo-400), yMax=Math.min(3400, d.hi+400);
+  const X=t=>44+(t-t0)/(t1-t0)*(W-56);
+  const Y=f=>H-26-((f-yMin)/(yMax-yMin))*(H-44);
+
+  // イ帯・ウ帯
+  ctx.fillStyle="rgba(124,179,66,0.16)";
+  ctx.fillRect(44, Y(yMax), W-56, Y(d.hi)-Y(yMax));
+  ctx.fillStyle="rgba(100,149,237,0.16)";
+  ctx.fillRect(44, Y(d.lo), W-56, Y(yMin)-Y(d.lo));
+  ctx.fillStyle="#9ccc65"; ctx.font="19px sans-serif"; ctx.fillText("イ "+Math.round(d.hi)+"Hz", 50, Y(d.hi)-8);
+  ctx.fillStyle="#90b8f0"; ctx.fillText("ウ "+Math.round(d.lo)+"Hz", 50, Y(d.lo)+24);
+  // 中央線
+  ctx.strokeStyle="#555"; ctx.lineWidth=1.5; ctx.setLineDash([6,6]);
+  ctx.beginPath(); ctx.moveTo(44,Y(d.mid)); ctx.lineTo(W-12,Y(d.mid)); ctx.stroke();
+  ctx.setLineDash([]);
+  // F2 の軌跡
+  ctx.strokeStyle="#e8e8e8"; ctx.lineWidth=2.4; ctx.beginPath();
+  let started=false, prev=-9;
+  d.idx.forEach(i=>{
+    if(i-prev>3){ started=false; }               // 無声区間で線を切る
+    prev=i;
+    const px=X(d.tm[i]), py=Y(d.f2[i]);
+    started?ctx.lineTo(px,py):ctx.moveTo(px,py); started=true;
+  });
+  ctx.stroke();
+  ctx.fillStyle="#8a8a8a"; ctx.font="17px sans-serif";
+  ctx.fillText("F2 (Hz)", 6, 20);
+}
+
 /* ========== 腹式呼吸の解析（v1.10.0） ==========
    共通解析（analyzeBuffer）は 20〜30秒の録音だとピッチ抽出が重すぎるので通さない。
    ここでは 20ms ホップの粗い包絡で足り、ピッチは8kHzに落としてから拾う。
@@ -1540,6 +1863,49 @@ function evaluateBreath(buf, m, advice){
   $("cmpBox").classList.add("hidden");
 }
 
+/* ウイウイの採点 */
+function evaluateUI(buf, m, advice){
+  const r=analyzeUI(buf);
+  if(!r){
+    alert("「う」と「い」の行き来を検出できませんでした。\n\n"
+      +"・声を出して交互に言ってください（口だけ動かすと測れません）\n"
+      +"・イとウの口の形をはっきり変えてください\n"
+      +"・マイクから15cmほど離してください");
+    return;
+  }
+  resultLabel="ウイウイ";
+  m.push(["口の描き分け（イとウの差）",r.spreadScore,"F2差 "+Math.round(r.spread)+"Hz"]);
+  m.push(["切り替えの速さ",r.transScore, r.transMs===null? "測れず" : Math.round(r.transMs)+"ms（目標 "+UI_TRANS_GOOD+"ms以下）"]);
+  m.push(["イの開き",r.iScore,"F2 "+Math.round(r.iF2)+"Hz（高いほど横に開けている）"]);
+  m.push(["ウのすぼめ",r.uScore,"F2 "+Math.round(r.uF2)+"Hz（低いほどすぼめられている）"]);
+  m.push(["粒のそろい",r.evenScore, r.count+"回・"+r.rate.toFixed(1)+"回/秒・ばらつき "+r.ivCv+"%"]);
+  const score=r.score;
+
+  // --- アドバイス（原因別） ---
+  if(r.spreadScore<60) advice.push("イとウの口の形の差が小さいです（F2差 "+Math.round(r.spread)+"Hz）。"
+    +"速く言おうとすると両方が中間の形に寄ります。<b>いったん半分の速さに落として</b>、"
+    +"一つひとつの形を作りきってから速くしてください。");
+  if(r.transScore<60 && r.transMs!==null) advice.push("切り替えに "+Math.round(r.transMs)+"ms かかっています（目標 "+UI_TRANS_GOOD+"ms以下）。"
+    +"途中の形を通らずに、<b>2つの形を直接行き来する</b>イメージで。唇だけで作ろうとせず、口角と唇を同時に動かします。");
+  if(r.iScore<60) advice.push("イの開きが足りません（F2 "+Math.round(r.iF2)+"Hz）。"
+    +"口角を<b>真横</b>に引きます。上に引き上げると笑顔の形になり、横には広がりません。上下の歯が見える程度まで。");
+  if(r.uScore<60) advice.push("ウのすぼめが足りません（F2 "+Math.round(r.uF2)+"Hz）。"
+    +"唇を前に突き出して<b>穴を小さく</b>します。日本語のウは英語ほど丸めないので、意識して丸めるくらいでちょうどよいです。");
+  if(r.evenScore<60) advice.push("速さがばらついています（ばらつき "+r.ivCv+"%）。画面の点灯に合わせて、どの切り替えも同じ間隔にしてください。");
+  if(r.count<12) advice.push("10秒で "+r.count+"回でした。まずは20回（2回/秒）を目安に。");
+  if(!advice.length) advice.push("よく描き分けられています。この形のまま少しずつ速くしていきましょう。");
+
+  if(!camOn) advice.push("<b>左右の歪みは音では測れません。</b>気になるなら「カメラを鏡として使う」を入れてもう一度どうぞ。イが一番開いた瞬間を静止画にして、左右を見比べられます。");
+
+  $("kcap").classList.remove("hidden");
+  $("kcap").innerHTML = "F2（口の形で決まる周波数）の推移です。緑の帯がイ、青の帯がウ。"
+    + "<b>帯の間が広いほど描き分けられていて、線が垂直に近いほど切り替えが速い</b>ことを表します。";
+  showResult(score,m,advice,null);
+  drawUIDetail(r.detail);
+  renderShots();
+  $("cmpBox").classList.add("hidden");
+}
+
 function evaluate(buf){
   const m=[]; let advice=[]; let score=0;
   const ex=currentEx.id;
@@ -1549,6 +1915,7 @@ function evaluate(buf){
   // 連続モードは共通解析（10秒分のピッチ抽出は重い）を使わないので、先に分岐する
   if(ex==="k" && currentMora.seq){ evaluateKSeq(buf,m,advice); return; }
   if(ex==="breath"){ evaluateBreath(buf,m,advice); return; }
+  if(ex==="ui"){ evaluateUI(buf,m,advice); return; }
   const an=analyzeBuffer(buf);
   if(ex==="lip" || ex==="roll"){
     const dur=voicedDuration(an);
