@@ -204,9 +204,10 @@
 <script>
 "use strict";
 /* ================= バージョン ================= */
-const APP_VERSION = "v1.11.0";
+const APP_VERSION = "v1.12.0";
 const APP_DATE    = "2026-08-29";
 const CHANGELOG = [
+  ["v1.12.0","2026-08-29","腹式呼吸の「スー」に『隙間の一定さ』を追加（摩擦音の音色から、途中で舌の隙間を狭めて時間を稼いでいないかを判定。持続時間と尻すぼみだけでは見抜けなかった抜け道をふさぐ）"],
   ["v1.11.0","2026-08-29","「ウイウイ」を追加（F2の行き来で口の描き分けと切り替えの速さを測定。左右の歪みは音では測れないため、カメラを鏡として使い、イが一番開いた瞬間の静止画を左右反転で見比べる方式にした。映像は端末内のみ）"],
   ["v1.10.0","2026-08-28","「腹式呼吸」を追加（ロングトーン／スーの2モード。尻すぼみをレベルの傾きとして測り、音量のゆらぎは傾きを除いた残差で評価。音程のぶら下がりも測定。レベル推移のグラフつき）"],
   ["v1.9.0","2026-08-25","「Kの子音」に カキクケコ連続10秒 を追加し、これを既定に（10秒の自動停止とテンポの目安つき／母音の色から並びの位相を推定して、キの摩擦だけを取り出して採点）"],
@@ -268,7 +269,8 @@ const BREATH_MODES = [
       +"細く長くが目的なので、絞り出した20秒より、余裕のある15秒のほうが良い記録です。"},
   {id:"su", label:"スー（息だけ）", short:"スー", voiced:false,
    tip:"歯の隙間から「スー」と息だけを細く長く出します。声は出しません。"
-      +"お腹の支えだけで息の量を一定に保つ練習で、声帯の影響を受けません。"},
+      +"<b>隙間の大きさは最初のまま変えないこと。</b> 狭めれば長くは続きますが、"
+      +"それは舌で稼いだ時間で、お腹の支えの練習にはなりません。続かなくなったところで終わりにしてください。"},
 ];
 let currentBreath = BREATH_MODES[0];
 try{
@@ -1589,6 +1591,33 @@ function drawUIDetail(d){
      ④ 途切れ（息継ぎ・音切れ）の合計秒数
      ⑤ 音程のばらつきと傾き（ロングトーンのみ）… 支えが切れると音程は下がる */
 
+/* 摩擦音のスペクトル重心。「スー」の音色＝舌先と歯が作る隙間の大きさを反映する。
+   低域は部屋の暗騒音が乗るので 2500Hz から上だけを見る。
+
+   **平坦成分を引いてから重心を取る。** そのまま重心を計算すると、帯域全体に広がった
+   平坦な雑音成分が効いてしまい、値が帯域の中点（約6.5kHz）に張り付いて感度が出ない。
+   帯域内の下位15%をベースラインとして引くと、山の位置そのものを拾えるようになり、
+   検証では 4000Hz 動かしたときに 3890Hz 追随した（引く前は 3415Hz、
+   平坦な信号だと 963Hz まで鈍った）。 */
+function fricCentroid(buf, start, N){
+  if(start<0 || start+N>buf.length) return null;
+  const re=new Float32Array(N), im=new Float32Array(N);
+  for(let j=0;j<N;j++){ re[j]=buf[start+j]*(0.5-0.5*Math.cos(2*Math.PI*j/N)); im[j]=0; }
+  fft(re,im);
+  const k0=Math.max(1,Math.round(2500*N/sr)), k1=Math.min((N>>1)-1,Math.round(12000*N/sr));
+  if(k1<=k0+8) return null;
+  const pw=[];
+  for(let k=k0;k<=k1;k++){ const a=Math.hypot(re[k],im[k]); pw.push(a*a); }
+  const srt=pw.slice().sort((a,b)=>a-b);
+  const base=srt[Math.round((srt.length-1)*0.15)];
+  let num=0, den=0;
+  for(let k=k0;k<=k1;k++){
+    const w=Math.max(0, pw[k-k0]-base);
+    num += w*(k*sr/N); den += w;
+  }
+  return den>0 ? num/den : null;
+}
+
 function linfit(xs, ys){          // 最小二乗で傾きと切片を出す
   const n=xs.length;
   if(n<3) return {a:0,b:ys.length?mean(ys):0};
@@ -1643,6 +1672,38 @@ function analyzeBreath(buf, mode){
   const wobbleDb=stdev(resid);                  // 傾きを除いた本当の揺れ
   const dropDb=slopeDb*dur;                     // 全体で何dB落ちたか
 
+  /* --- ⑥ 隙間の一定さ（スーのみ・v1.12.0） ---
+     「スー」の抵抗は舌先と歯が作る隙間そのものなので、隙間を狭めれば
+     お腹の支えを使わなくても流量が落ちて時間だけ伸びる。つまり
+     **持続時間と尻すぼみだけでは、舌で稼いだ時間を見抜けない。**
+     隙間の大きさは摩擦音の音色（スペクトル重心）に出るので、録音を通して
+     重心が動かなければ、途中で口の中を調整していないと言える。
+
+     **捕まえられるのは「途中で変えたか」だけ。** 最初から狭く小さく出し続けた場合は
+     重心も一定なので、この軸では見抜けない。そのため平均重心を実測値として出し、
+     週をまたいで上がっていないかを本人が追えるようにしている。 */
+  let cenMean=null, cenSlope=null, cenDrift=null, cenWobble=null, gapScore=null;
+  if(!mode.voiced){
+    const N2=1024;
+    const ct=[], cv=[];
+    for(const i of on){
+      if(rms[i] < thr*1.6) continue;             // 弱いフレームは暗騒音に引っ張られる
+      const s0=Math.round(tm[i]*sr);
+      const c=fricCentroid(buf, s0, N2);
+      if(c!==null){ ct.push(tm[i]); cv.push(c); }
+    }
+    if(cv.length>=12){
+      cenMean=mean(cv);
+      const cf=linfit(ct,cv);
+      cenSlope=cf.a;                              // Hz/秒
+      cenDrift=cenSlope*dur;                      // 全体で何Hz動いたか
+      cenWobble=stdev(cv.map((v,i)=>v-(cf.a*ct[i]+cf.b)));
+      const driftSc = clamp(100-Math.max(0,Math.abs(cenDrift)-400)*(100/1600));
+      const wobSc   = clamp(100-Math.max(0,cenWobble-120)*(100/500));
+      gapScore = Math.round(driftSc*0.60 + wobSc*0.40);
+    }
+  }
+
   /* --- ⑤ 音程（ロングトーンのみ）。8kHzに落としてから拾う --- */
   let centSd=null, centSlope=null, f0med=null, pn=0;
   if(mode.voiced){
@@ -1694,12 +1755,15 @@ function analyzeBreath(buf, mode){
                     +pitchScore*0.13+sagScore*0.12+breakScore*0.10);
   }else if(mode.voiced){
     score=Math.round(durScore*0.38+slopeScore*0.32+wobbleScore*0.20+breakScore*0.10);
+  }else if(gapScore!==null){
+    score=Math.round(durScore*0.28+slopeScore*0.26+gapScore*0.20+wobbleScore*0.14+breakScore*0.12);
   }else{
     score=Math.round(durScore*0.35+slopeScore*0.30+wobbleScore*0.20+breakScore*0.15);
   }
 
-  return {score, durScore, slopeScore, wobbleScore, breakScore, pitchScore, sagScore,
+  return {score, durScore, slopeScore, wobbleScore, breakScore, pitchScore, sagScore, gapScore,
           dur, span, breakSec, slopeDb, dropDb, wobbleDb, centSd, centSlope, f0med, pn,
+          cenMean, cenSlope, cenDrift, cenWobble,
           detail:{rms, tm, dt, thr, first, last, on, fit, dur}};
 }
 
@@ -1822,6 +1886,11 @@ function evaluateBreath(buf, m, advice){
     m.push(["音程のぶら下がりのなさ",r.sagScore,
             sgn(r.centSlope)+" セント/秒（全体で "+sgn(r.centSlope*r.dur)+"セント）"]);
   }
+  if(r.gapScore!==null && r.gapScore!==undefined){
+    const sd=(r.cenDrift>=0?"+":"")+Math.round(r.cenDrift);
+    m.push(["隙間の一定さ（舌）",r.gapScore,
+            "音色 "+sd+"Hz 動いた（平均 "+Math.round(r.cenMean)+"Hz）"]);
+  }
   m.push(["途切れのなさ",r.breakScore, r.breakSec<0.05 ? "途切れなし" : "途切れ "+r.breakSec.toFixed(1)+"秒"]);
   const score=r.score;
 
@@ -1835,6 +1904,16 @@ function evaluateBreath(buf, m, advice){
     +"苦しくなって押し出しているサインです。目標秒数に届かなくてよいので、同じ強さで止めましょう。");
   if(r.wobbleScore<60) advice.push("音量が細かく揺れています（±"+r.wobbleDb.toFixed(1)+"dB）。"
     +"喉で息を止めながら出している可能性があります。息の流れは止めず、量だけをお腹で調整してください。");
+  if(r.gapScore!==null && r.gapScore!==undefined && r.gapScore<60){
+    const up = r.cenDrift>0;
+    advice.push("途中で舌の隙間が変わっています（音色が "+(up?"+":"")+Math.round(r.cenDrift)+"Hz 動いた）。"
+      +(up ? "息が減るにつれて<b>隙間を狭めて調整している</b>状態です。長さは稼げますが、"
+            +"支えの練習にはなりません。隙間は最初のまま固定して、続かなくなったところで終わりにしてください。"
+           : "途中で隙間が広がっています。舌の力が抜けているので、口の形を保つことを先に意識してください。"));
+  }
+  if(r.gapScore!==null && r.gapScore!==undefined && r.gapScore>=75 && r.slopeScore>=75 && r.durScore>=80)
+    advice.push("隙間を変えずに最後まで一定に出せています。<b>これがお腹で支えられている状態</b>です。"
+      +"次は同じ質のまま1〜2秒だけ伸ばしましょう。");
   if(r.breakScore<70 && r.breakSec>=0.05) advice.push("途中で "+r.breakSec.toFixed(1)+"秒 切れています。"
     +"切れた時点で終わりにして、1本で出せる長さを記録するほうが練習になります。");
   if(r.pitchScore!==null && r.pitchScore<60) advice.push("音程が揺れています（±"+r.centSd.toFixed(0)+"セント）。"
