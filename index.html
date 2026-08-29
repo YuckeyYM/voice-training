@@ -90,6 +90,7 @@
   <div class="ex-name" id="exName"></div>
   <div class="ex-desc" id="exDesc"></div>
   <div class="moras hidden" id="moraRow"></div>
+  <div class="moras hidden" id="brRow"></div>
   <canvas class="viz" id="viz"></canvas>
   <div class="pace" id="paceRow"></div>
   <div class="countdown" id="countdown"></div>
@@ -172,9 +173,10 @@
 <script>
 "use strict";
 /* ================= バージョン ================= */
-const APP_VERSION = "v1.9.0";
-const APP_DATE    = "2026-08-25";
+const APP_VERSION = "v1.10.0";
+const APP_DATE    = "2026-08-28";
 const CHANGELOG = [
+  ["v1.10.0","2026-08-28","「腹式呼吸」を追加（ロングトーン／スーの2モード。尻すぼみをレベルの傾きとして測り、音量のゆらぎは傾きを除いた残差で評価。音程のぶら下がりも測定。レベル推移のグラフつき）"],
   ["v1.9.0","2026-08-25","「Kの子音」に カキクケコ連続10秒 を追加し、これを既定に（10秒の自動停止とテンポの目安つき／母音の色から並びの位相を推定して、キの摩擦だけを取り出して採点）"],
   ["v1.8.0","2026-08-22","「Kの子音」に カ・キ・ク・ケ・コ の個別練習を追加（モーラごとの基準で採点／破裂後の摩擦を新たに測定／直近の他モーラとの比較表）"],
   ["v1.7.0","2026-08-22","「Kの子音」を全面的に作り直し（閉鎖の深さ・破裂後の気息を新たに測定／破裂波形の拡大表示を追加）"],
@@ -196,7 +198,34 @@ const EXERCISES = [
  {id:"k", name:"5. Kの子音", desc:"下から練習の種類を選びます。マイクから10cmほど離してください。"},
  {id:"cv", name:"6. 子音＋母音（母音を強く）", desc:"「カ・キ・ク・ケ・コ」などを、母音をしっかり張って発音。母音の音圧と響きの安定を測ります。"},
  {id:"stac", name:"7. あっいっうっえっおっ", desc:"5つの音を歯切れよく区切って発音。粒の数・間隔の均一さ・音量のそろい方を測ります。"},
+ {id:"breath", name:"8. 腹式呼吸", desc:"下から練習の種類を選びます。息を細く長く、最後まで同じ強さで。"},
 ];
+
+/* ---- 腹式呼吸：2つのモード（v1.10.0） ----
+   リップロールも「持続」と「安定」を測っているが、見ているものが違う。
+   リップロールの音量の安定は**ばらつき（CV）**で、上下に揺れる量を見ている。
+   腹式呼吸で問題になるのは揺れではなく**尻すぼみ**――息が尽きるにつれて
+   じわじわ弱くなる一方向の変化で、これはCVにはほとんど出ない。
+   そこでこのメニューでは、レベルの**傾き**（dB/秒）を独立した軸として測り、
+   ばらつきは傾きを取り除いた残差（＝本当の揺れ）で評価する。
+
+   2モードを分けているのは切り分けのため。「スー」は声帯を使わないので
+   純粋な息のコントロールだけを見る。スーは保つのにロングトーンが尻すぼみなら、
+   原因は呼吸ではなく発声側（声帯・共鳴）にある。 */
+const BREATH_TARGET = 20;   // 目標の持続時間（秒）
+const BREATH_MODES = [
+  {id:"lt", label:"ロングトーン（アー）", short:"ロングトーン", voiced:true,
+   tip:"「アー」を、**小さめの音量で**一定の高さのまま伸ばします。大きな声で頑張らないこと。"
+      +"細く長くが目的なので、絞り出した20秒より、余裕のある15秒のほうが良い記録です。"},
+  {id:"su", label:"スー（息だけ）", short:"スー", voiced:false,
+   tip:"歯の隙間から「スー」と息だけを細く長く出します。声は出しません。"
+      +"お腹の支えだけで息の量を一定に保つ練習で、声帯の影響を受けません。"},
+];
+let currentBreath = BREATH_MODES[0];
+try{
+  const sb=localStorage.getItem("vt_breath");
+  if(sb){ const f=BREATH_MODES.find(m=>m.id===sb); if(f) currentBreath=f; }
+}catch(e){}
 
 /* ---- Kの子音：モーラ別の設定 ----
    日本語の /k/ は、続く母音によって VOT（破裂から声が始まるまでの時間）が生理的に変わる。
@@ -336,13 +365,42 @@ function selectEx(ex,btn){
   $("kcap").classList.add("hidden");
   $("cmpBox").classList.add("hidden");
   $("recBtn").textContent = ex.id==="tongue" ? "① 舌なしで録音" : "録音スタート";
+  $("brRow").classList.add("hidden");
   if(ex.id==="k"){ moraRow.classList.remove("hidden"); selectMora(currentMora); }
+  else if(ex.id==="breath"){
+    moraRow.classList.add("hidden");
+    $("paceRow").classList.remove("on");
+    $("countdown").classList.remove("on");
+    $("brRow").classList.remove("hidden");
+    selectBreath(currentBreath);
+  }
   else {
     moraRow.classList.add("hidden");
     $("paceRow").classList.remove("on");
     $("countdown").classList.remove("on");
     drawChart();
   }
+}
+/* ---- 腹式呼吸のモード切り替え ---- */
+BREATH_MODES.forEach(mo=>{
+  const b=document.createElement("button");
+  b.className="mora"+(mo.id===currentBreath.id?" active":"");
+  b.textContent=mo.short;
+  b.dataset.br=mo.id;
+  b.onclick=()=>selectBreath(mo);
+  $("brRow").appendChild(b);
+});
+function selectBreath(mo){
+  if(recording) stopRecording(true);
+  currentBreath=mo;
+  try{ localStorage.setItem("vt_breath",mo.id); }catch(e){}
+  $("brRow").querySelectorAll(".mora").forEach(b=>b.classList.toggle("active", b.dataset.br===mo.id));
+  $("exDesc").innerHTML = "息を吸いきってから、**"+BREATH_TARGET+"秒**を目標に。　【"+mo.label+"】"+mo.tip;
+  $("exDesc").innerHTML = $("exDesc").innerHTML.replace(/\*\*(.+?)\*\*/g,"<b>$1</b>");
+  $("resultCard").classList.add("hidden");
+  $("kviz").classList.add("hidden");
+  $("kcap").classList.add("hidden");
+  drawChart();
 }
 selectEx(currentEx,document.querySelector(".tab"));
 
@@ -1197,6 +1255,174 @@ function renderMoraCompare(){
   box.innerHTML=html; box.classList.remove("hidden");
 }
 
+/* ========== 腹式呼吸の解析（v1.10.0） ==========
+   共通解析（analyzeBuffer）は 20〜30秒の録音だとピッチ抽出が重すぎるので通さない。
+   ここでは 20ms ホップの粗い包絡で足り、ピッチは8kHzに落としてから拾う。
+
+   測るもの：
+     ① 発声できていた時間（途切れを除いた実時間）
+     ② レベルの傾き（dB/秒）… 尻すぼみ。**この軸がこのメニューの主役**
+     ③ 傾きを除いた残差のばらつき（dB）… 本当の揺れ
+     ④ 途切れ（息継ぎ・音切れ）の合計秒数
+     ⑤ 音程のばらつきと傾き（ロングトーンのみ）… 支えが切れると音程は下がる */
+
+function linfit(xs, ys){          // 最小二乗で傾きと切片を出す
+  const n=xs.length;
+  if(n<3) return {a:0,b:ys.length?mean(ys):0};
+  const mx=mean(xs), my=mean(ys);
+  let num=0, den=0;
+  for(let i=0;i<n;i++){ const dx=xs[i]-mx; num+=dx*(ys[i]-my); den+=dx*dx; }
+  const a= den>0 ? num/den : 0;
+  return {a, b: my - a*mx};
+}
+
+function analyzeBreath(buf, mode){
+  const hop=Math.max(1,Math.round(sr*0.02)), win=Math.max(8,Math.round(sr*0.04));
+  const rms=[], tm=[];
+  for(let i=0;i+win<=buf.length;i+=hop){
+    let s=0; for(let j=i;j<i+win;j++) s+=buf[j]*buf[j];
+    rms.push(Math.sqrt(s/win)); tm.push(i/sr);
+  }
+  const dt=hop/sr, N=rms.length;
+  if(N<25) return null;                       // 0.5秒未満は対象外
+  const sorted=rms.slice().sort((a,b)=>a-b);
+  const q=p=>sorted[Math.max(0,Math.min(N-1,Math.round(p*(N-1))))];
+  const noise=q(0.02), sig=q(0.95);
+  /* しきい値は**暗騒音を基準に**置く。信号の何割、という決め方をすると、
+     尻すぼみで実際に弱くなった後半がしきい値を下回り、持続時間が短く出てしまう
+     （測りたいのはまさにその尻すぼみなので、それでは本末転倒になる）。
+     ただし録音の頭とお尻に無音が無いと暗騒音が拾えないので、
+     S/N が取れているときだけ暗騒音基準にし、取れなければ信号基準に落とす。 */
+  let thr;
+  if(noise>0 && sig/noise>10) thr=noise*3;     // 暗騒音より約+9.5dB
+  else thr=sig*0.25;                            // 無音が無い録音向けの保険
+  if(!(thr>0)) return null;
+
+  let first=-1,last=-1;
+  for(let i=0;i<N;i++){ if(rms[i]>thr){ if(first<0) first=i; last=i; } }
+  if(first<0 || last-first<10) return null;   // 0.2秒未満は対象外
+
+  const on=[];                                 // 鳴っているフレーム
+  let breakFrames=0;
+  for(let i=first;i<=last;i++){
+    if(rms[i]>thr) on.push(i); else breakFrames++;
+  }
+  const dur=on.length*dt;                      // 実際に出ていた時間
+  const span=(last-first+1)*dt;
+  const breakSec=breakFrames*dt;
+
+  /* --- ② レベルの傾き と ③ 残差のばらつき --- */
+  const xs=on.map(i=>tm[i]);
+  const ys=on.map(i=>20*Math.log10(Math.max(rms[i],1e-9)));
+  const fit=linfit(xs,ys);
+  const slopeDb=fit.a;                          // dB/秒（負なら尻すぼみ）
+  const resid=ys.map((y,i)=>y-(fit.a*xs[i]+fit.b));
+  const wobbleDb=stdev(resid);                  // 傾きを除いた本当の揺れ
+  const dropDb=slopeDb*dur;                     // 全体で何dB落ちたか
+
+  /* --- ⑤ 音程（ロングトーンのみ）。8kHzに落としてから拾う --- */
+  let centSd=null, centSlope=null, f0med=null, pn=0;
+  if(mode.voiced){
+    const dec=Math.max(1,Math.round(sr/8000)), dsr=sr/dec;
+    const ds=new Float32Array(Math.floor(buf.length/dec));
+    for(let i=0;i<ds.length;i++){
+      let s=0; for(let j=0;j<dec;j++){ const k=i*dec+j; s += k<buf.length? buf[k] : 0; }
+      ds[i]=s/dec;
+    }
+    const pw=Math.round(dsr*0.05), step=Math.round(dsr*0.05);
+    const pt=[], pf=[];
+    for(let s0=Math.round(tm[first]*dsr); s0+pw<=ds.length && s0<=tm[last]*dsr; s0+=step){
+      const f=autocorrPitch(ds.subarray(s0,s0+pw),dsr);
+      if(f>0){ pt.push(s0/dsr); pf.push(f); }
+    }
+    if(pf.length>=8){
+      const srt=pf.slice().sort((a,b)=>a-b);
+      f0med=srt[Math.floor(srt.length/2)];
+      const cents=pf.map(f=>1200*Math.log2(f/f0med));
+      // オクターブ跳び（検出ミス）を落とす
+      const keep=[]; const kt=[];
+      for(let i=0;i<cents.length;i++) if(Math.abs(cents[i])<600){ keep.push(cents[i]); kt.push(pt[i]); }
+      if(keep.length>=8){
+        const cf=linfit(kt,keep);
+        centSlope=cf.a;                          // セント/秒（負なら下がっている）
+        const cr=keep.map((c,i)=>c-(cf.a*kt[i]+cf.b));
+        centSd=stdev(cr);
+        pn=keep.length;
+      }
+    }
+  }
+
+  /* --- 採点 --- */
+  const durScore = clamp(dur/BREATH_TARGET*100);
+  /* 尻すぼみは **dB/秒ではなく「全体で何dB落ちたか」** で採点する。
+     耳で分かるのは変化の速さではなく落ち幅で、同じ -0.6dB/秒 でも
+     20秒なら -12dB（明らかな失速）、3秒なら -1.8dB（問題なし）と意味が変わるため。
+     大きくなっていく側（押し出し）も不安定だが、失速よりは軽いので重みを半分にする。 */
+  const effDrop = dropDb<0 ? -dropDb : dropDb*0.5;
+  const slopeScore = clamp(100-Math.max(0,effDrop-1.5)*6);
+  const wobbleScore= clamp(100-Math.max(0,wobbleDb-0.5)*30);
+  const breakScore = clamp(100-breakSec*30);
+  const pitchScore = centSd===null ? null : clamp(100-Math.max(0,centSd-15)*1.5);
+  const sagScore   = centSlope===null ? null : clamp(100-Math.max(0,Math.abs(centSlope)-1)*12);
+
+  let score;
+  if(mode.voiced && pitchScore!==null){
+    score=Math.round(durScore*0.28+slopeScore*0.24+wobbleScore*0.13
+                    +pitchScore*0.13+sagScore*0.12+breakScore*0.10);
+  }else if(mode.voiced){
+    score=Math.round(durScore*0.38+slopeScore*0.32+wobbleScore*0.20+breakScore*0.10);
+  }else{
+    score=Math.round(durScore*0.35+slopeScore*0.30+wobbleScore*0.20+breakScore*0.15);
+  }
+
+  return {score, durScore, slopeScore, wobbleScore, breakScore, pitchScore, sagScore,
+          dur, span, breakSec, slopeDb, dropDb, wobbleDb, centSd, centSlope, f0med, pn,
+          detail:{rms, tm, dt, thr, first, last, on, fit, dur}};
+}
+
+/* レベルの推移と回帰直線を描く。尻すぼみは数字より形で見たほうが早い */
+function drawBreathDetail(d){
+  const c=$("kviz"); c.classList.remove("hidden");
+  const ctx=c.getContext("2d");
+  const W=c.width=c.clientWidth*2, H=c.height=260;
+  ctx.fillStyle="#141414"; ctx.fillRect(0,0,W,H);
+  const t0=d.tm[d.first], t1=Math.max(d.tm[d.last], t0+1);
+  const tmax=Math.max(t1, BREATH_TARGET);
+  const x=t=>28+(t-t0)/(tmax-t0)*(W-46);
+  // dB の表示範囲：鳴っている区間の実測に合わせる
+  let lo=1e9, hi=-1e9;
+  d.on.forEach(i=>{ const v=20*Math.log10(Math.max(d.rms[i],1e-9)); if(v<lo)lo=v; if(v>hi)hi=v; });
+  const pad=Math.max(4,(hi-lo)*0.25); lo-=pad; hi+=pad;
+  const y=v=>H-22-((v-lo)/(hi-lo))*(H-40);
+
+  // 目標秒の縦線
+  if(BREATH_TARGET<=tmax){
+    ctx.strokeStyle="#4a4a4a"; ctx.lineWidth=2; ctx.setLineDash([5,5]);
+    ctx.beginPath(); ctx.moveTo(x(t0+BREATH_TARGET),0); ctx.lineTo(x(t0+BREATH_TARGET),H); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle="#8a8a8a"; ctx.font="18px sans-serif";
+    ctx.fillText(BREATH_TARGET+"秒", x(t0+BREATH_TARGET)+6, 22);
+  }
+  // 実測のレベル
+  ctx.strokeStyle="#e8e8e8"; ctx.lineWidth=2; ctx.beginPath();
+  let started=false;
+  for(let i=d.first;i<=d.last;i++){
+    if(d.rms[i]<=d.thr){ started=false; continue; }   // 途切れは線を切る
+    const px=x(d.tm[i]), py=y(20*Math.log10(Math.max(d.rms[i],1e-9)));
+    started?ctx.lineTo(px,py):ctx.moveTo(px,py); started=true;
+  }
+  ctx.stroke();
+  // 回帰直線（尻すぼみの傾き）
+  const ta=d.tm[d.first], tb=d.tm[d.last];
+  ctx.strokeStyle=(d.fit.a<-0.5)?"#e57373":"#7cb342"; ctx.lineWidth=3;
+  ctx.beginPath();
+  ctx.moveTo(x(ta), y(d.fit.a*ta+d.fit.b));
+  ctx.lineTo(x(tb), y(d.fit.a*tb+d.fit.b));
+  ctx.stroke();
+  ctx.fillStyle=(d.fit.a<-0.5)?"#ef9a9a":"#aed581"; ctx.font="19px sans-serif";
+  ctx.fillText((d.fit.a>=0?"+":"")+d.fit.a.toFixed(1)+" dB/秒", x(tb)-150, y(d.fit.a*tb+d.fit.b)-10);
+}
+
 /* ================= 採点 ================= */
 /* 連続10秒モードの採点。共通解析（analyzeBuffer）は10秒分だと重いので通さない */
 function evaluateKSeq(buf, m, advice){
@@ -1251,6 +1477,69 @@ function evaluateKSeq(buf, m, advice){
   renderSeqTable(r);
 }
 
+/* 腹式呼吸の採点。共通解析は使わない（長い録音でピッチ抽出が重いため） */
+function evaluateBreath(buf, m, advice){
+  const mo=currentBreath;
+  const r=analyzeBreath(buf, mo);
+  if(!r){
+    alert("音が検出できませんでした。\n\n"
+      +(mo.voiced ? "「アー」を息を吸いきってから、切らさずに伸ばしてください。"
+                  : "「スー」は音が小さいので、マイクに少し近づいて（15cmほど）試してください。"));
+    return;
+  }
+  resultLabel="腹式呼吸（"+mo.short+"）";
+  const sgn=v=>(v>=0?"+":"")+v.toFixed(1);
+
+  m.push(["持続時間",r.durScore,r.dur.toFixed(1)+"秒（目標 "+BREATH_TARGET+"秒）"]);
+  m.push(["尻すぼみのなさ",r.slopeScore,
+          "全体で "+sgn(r.dropDb)+"dB（"+sgn(r.slopeDb)+" dB/秒）"]);
+  m.push(["音量のゆらぎの少なさ",r.wobbleScore,"±"+r.wobbleDb.toFixed(1)+"dB（傾きを除いた値）"]);
+  if(mo.voiced && r.pitchScore!==null){
+    m.push(["音程の安定",r.pitchScore,"ばらつき ±"+r.centSd.toFixed(0)+"セント"]);
+    m.push(["音程のぶら下がりのなさ",r.sagScore,
+            sgn(r.centSlope)+" セント/秒（全体で "+sgn(r.centSlope*r.dur)+"セント）"]);
+  }
+  m.push(["途切れのなさ",r.breakScore, r.breakSec<0.05 ? "途切れなし" : "途切れ "+r.breakSec.toFixed(1)+"秒"]);
+  const score=r.score;
+
+  // --- アドバイス（原因別） ---
+  if(r.durScore<80) advice.push("まだ "+r.dur.toFixed(1)+"秒です（目標 "+BREATH_TARGET+"秒）。息の量ではなく"
+    +"<b>出す量</b>を減らすほうが伸びます。吸う量を増やそうとすると肩に力が入り、かえって短くなります。");
+  if(r.slopeScore<60 && r.dropDb<0) advice.push("尻すぼみになっています（全体で "+sgn(r.dropDb)+"dB）。"
+    +"息が減っても同じ強さを保つには、後半でお腹を<b>さらにゆっくり</b>へこませ続ける必要があります。"
+    +"最初から全力で出さず、7割の強さで始めてください。");
+  if(r.dropDb>4) advice.push("後半にかけて強くなっています（全体で "+sgn(r.dropDb)+"dB）。"
+    +"苦しくなって押し出しているサインです。目標秒数に届かなくてよいので、同じ強さで止めましょう。");
+  if(r.wobbleScore<60) advice.push("音量が細かく揺れています（±"+r.wobbleDb.toFixed(1)+"dB）。"
+    +"喉で息を止めながら出している可能性があります。息の流れは止めず、量だけをお腹で調整してください。");
+  if(r.breakScore<70 && r.breakSec>=0.05) advice.push("途中で "+r.breakSec.toFixed(1)+"秒 切れています。"
+    +"切れた時点で終わりにして、1本で出せる長さを記録するほうが練習になります。");
+  if(r.pitchScore!==null && r.pitchScore<60) advice.push("音程が揺れています（±"+r.centSd.toFixed(0)+"セント）。"
+    +"高さを保とうと喉で支えず、息の流れを一定にすることで結果的に音程が安定します。");
+  if(r.sagScore!==null && r.sagScore<60 && r.centSlope<0)
+    advice.push("音程がぶら下がっています（全体で "+sgn(r.centSlope*r.dur)+"セント）。"
+      +"<b>支えが切れてきた合図</b>で、尻すぼみと同じ原因です。音量より先に音程に出ることが多いので、"
+      +"下がり始めたところが今の限界だと思ってください。");
+  if(!advice.length) advice.push("よく保てています。次は同じ質のまま1〜2秒だけ伸ばすことを狙いましょう。");
+
+  // スーとロングトーンの切り分け（両方の記録がある場合だけ）
+  const other = BREATH_MODES.find(x=>x.id!==mo.id);
+  const oh = loadHist().filter(x=>x.ex==="breath:"+other.id).slice(-3);
+  if(oh.length && r.slopeScore<60){
+    const om=Math.round(mean(oh.map(x=>x.s)));
+    advice.push(mo.voiced
+      ? "参考：直近の「スー」は平均"+om+"点。スーが保ててロングトーンが尻すぼみなら、原因は呼吸ではなく発声側（声帯・共鳴）にあります。"
+      : "参考：直近の「ロングトーン」は平均"+om+"点。スーの側で崩れているなら、原因は呼吸そのものです。");
+  }
+
+  $("kcap").classList.remove("hidden");
+  $("kcap").innerHTML = "白い線が実際の音量、太い線がその傾きです。"
+    + "<b>水平に近いほど</b>息を最後まで一定に保てています。右下がりなら尻すぼみ、点線は目標の"+BREATH_TARGET+"秒です。";
+  showResult(score,m,advice,null);
+  drawBreathDetail(r.detail);
+  $("cmpBox").classList.add("hidden");
+}
+
 function evaluate(buf){
   const m=[]; let advice=[]; let score=0;
   const ex=currentEx.id;
@@ -1259,6 +1548,7 @@ function evaluate(buf){
   $("cmpBox").classList.add("hidden");
   // 連続モードは共通解析（10秒分のピッチ抽出は重い）を使わないので、先に分岐する
   if(ex==="k" && currentMora.seq){ evaluateKSeq(buf,m,advice); return; }
+  if(ex==="breath"){ evaluateBreath(buf,m,advice); return; }
   const an=analyzeBuffer(buf);
   if(ex==="lip" || ex==="roll"){
     const dur=voicedDuration(an);
@@ -1410,6 +1700,7 @@ function showResult(score,metrics,advice,kStat){
 // v1.8.0：Kの子音はモーラごとに別の推移として記録する。
 // 「クッ（単独）」は v1.7.0 以前と同じキー "k" のままなので、過去の推移が途切れない。
 function histKey(){
+  if(currentEx.id==="breath") return "breath:"+currentBreath.id;
   if(currentEx.id!=="k") return currentEx.id;
   return currentMora.id==="kq" ? "k" : "k:"+currentMora.id;
 }
@@ -1425,7 +1716,9 @@ function drawChart(){
   const key=histKey();
   $("chartTitle").textContent = currentEx.id==="k"
     ? "スコア推移（"+currentMora.label+"の直近12回）"
-    : "スコア推移（この練習の直近12回）";
+    : currentEx.id==="breath"
+      ? "スコア推移（"+currentBreath.label+"の直近12回）"
+      : "スコア推移（この練習の直近12回）";
   const c=$("chart"), ctx=c.getContext("2d");
   const W=c.width=c.clientWidth*2, H=c.height=240;
   ctx.clearRect(0,0,W,H);
