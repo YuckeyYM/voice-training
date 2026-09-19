@@ -105,6 +105,7 @@
   <div class="moras hidden" id="moraRow"></div>
   <div class="moras hidden" id="brRow"></div>
   <div class="moras hidden" id="flRow"></div>
+  <div class="moras hidden" id="tpRow"></div>
   <canvas class="viz" id="viz"></canvas>
   <div class="pace" id="paceRow"></div>
   <div class="countdown" id="countdown"></div>
@@ -205,9 +206,10 @@
 <script>
 "use strict";
 /* ================= バージョン ================= */
-const APP_VERSION = "v1.14.0";
+const APP_VERSION = "v1.15.0";
 const APP_DATE    = "2026-09-19";
 const CHANGELOG = [
+  ["v1.15.0","2026-09-19","「に・る 連続」にテンポ選択を追加（400/300/200/150ms。150ms は通常の話速で、「じゅうににち」の「にに」に相当。期待粒数・最短間隔・平滑化・谷の幅の基準をすべて拍に連動させ、テンポ別にスコアを記録）"],
   ["v1.14.0","2026-09-19","腹式呼吸に「リップロール（2-2-12）」を追加（2拍吸う→2拍止める→12拍出す、の誘導つき。出す区間だけを採点し、震えの規則性もあわせて見る。1拍=1秒）"],
   ["v1.13.0","2026-09-19","「に・る 連続」を追加（同じ音を10秒くり返す。母音のフォルマントのばらつきから『口の形を固定できているか』を採点。最初の1粒と最後の1粒をカメラで並べて比較）"],
   ["v1.12.0","2026-08-29","腹式呼吸の「スー」に『隙間の一定さ』を追加（摩擦音の音色から、途中で舌の隙間を狭めて時間を稼いでいないかを判定。持続時間と尻すぼみだけでは見抜けなかった抜け道をふさぐ）"],
@@ -306,7 +308,23 @@ try{
    **左右の歪みや、あごが動いているかは音に出ない。** そこはウイウイと同じく
    カメラを鏡として使い、最初の1粒と最後の1粒を並べて本人の目で見てもらう。採点はしない。 */
 const FLAP_SEC = 10;          // 録音の長さ
-const FLAP_BEAT_MS = 400;     // テンポの目安（2.5音/秒。カキクケコ・ウイウイと同じ）
+/* テンポは選べるようにする。**遅い拍で固定すると課題が別物になる。**
+   日本語の通常の話速はおよそ6〜8モーラ/秒で、「じゅうににち」の「にに」も
+   その速さで出てくる。400ms（2.5音/秒）は3倍近く遅く、舌が戻る時間が十分あるので、
+   本人が難しいと言っている状態を再現できない。
+   解析側のしきい値（期待粒数・最短間隔・平滑化の幅・谷の幅）はすべて拍から算出する。 */
+const FLAP_TEMPOS = [
+  {ms:400, short:"400", note:"2.5音/秒・ゆっくり"},
+  {ms:300, short:"300", note:"3.3音/秒"},
+  {ms:200, short:"200", note:"5音/秒"},
+  {ms:150, short:"150", note:"6.7音/秒・通常の話速"},
+];
+let currentTempo = FLAP_TEMPOS[2];   // 既定は200ms
+try{
+  const st=localStorage.getItem("vt_flaptempo");
+  if(st){ const f=FLAP_TEMPOS.find(t=>String(t.ms)===st); if(f) currentTempo=f; }
+}catch(e){}
+function flapBeat(){ return currentTempo.ms; }
 /* 谷（子音）の目標値は暫定。記録がたまったら見直す。 */
 const FLAP_MODES = [
   {id:"ni", label:"に（にににに）", short:"に", ch:"に", vowel:"i",
@@ -472,6 +490,7 @@ function selectEx(ex,btn){
   $("recBtn").textContent = ex.id==="tongue" ? "① 舌なしで録音" : "録音スタート";
   $("brRow").classList.add("hidden");
   $("flRow").classList.add("hidden");
+  $("tpRow").classList.add("hidden");
   $("shotRow").classList.add("hidden");
   $("shotCap").classList.add("hidden");
   $("shotOrig").parentElement.style.display = (ex.id==="flap") ? "none" : "";
@@ -541,13 +560,31 @@ FLAP_MODES.forEach(mo=>{
   b.onclick=()=>selectFlap(mo);
   $("flRow").appendChild(b);
 });
+/* ---- に・る のテンポ切り替え ---- */
+FLAP_TEMPOS.forEach(tp=>{
+  const b=document.createElement("button");
+  b.className="mora"+(tp.ms===currentTempo.ms?" active":"");
+  b.textContent=tp.short;
+  b.dataset.tp=String(tp.ms);
+  b.onclick=()=>selectTempo(tp);
+  $("tpRow").appendChild(b);
+});
+function selectTempo(tp){
+  if(recording) stopRecording(true);
+  currentTempo=tp;
+  try{ localStorage.setItem("vt_flaptempo",String(tp.ms)); }catch(e){}
+  $("tpRow").querySelectorAll(".mora").forEach(b=>b.classList.toggle("active", b.dataset.tp===String(tp.ms)));
+  selectFlap(currentFlap);
+}
 function selectFlap(mo){
   if(recording) stopRecording(true);
   currentFlap=mo;
   try{ localStorage.setItem("vt_flap",mo.id); }catch(e){}
   $("flRow").querySelectorAll(".mora").forEach(b=>b.classList.toggle("active", b.dataset.fl===mo.id));
-  $("exDesc").innerHTML = "「"+mo.ch+""+mo.ch+""+mo.ch+""+mo.ch+"」を止めずに"+FLAP_SEC+"秒つづけます。"
-    + "下の点灯に合わせて、速さを変えずに。"+FLAP_SEC+"秒たつと自動で止まります。　【"+mo.label+"】" + mo.tip;
+  $("tpRow").classList.remove("hidden");
+  $("exDesc").innerHTML = "「"+mo.ch.repeat(4)+"」を止めずに"+FLAP_SEC+"秒つづけます。"
+    + "いまのテンポは <b>"+currentTempo.ms+"ms/音（"+currentTempo.note+"）</b>。上のボタンで変えられます。"
+    + "　【"+mo.label+"】" + mo.tip;
   setPaceCells([mo.ch,mo.ch,mo.ch,mo.ch,mo.ch]);
   $("paceRow").classList.add("on");
   $("paceRow").querySelectorAll("span").forEach(s=>s.classList.remove("hit"));
@@ -722,7 +759,7 @@ function startPace(){
   if(!cells.length) return;
   $("paceRow").classList.add("on");
   $("countdown").classList.add("on");
-  const beatMs = currentEx.id==="ui" ? UI_BEAT_MS : currentEx.id==="flap" ? FLAP_BEAT_MS : SEQ_BEAT_MS;
+  const beatMs = currentEx.id==="ui" ? UI_BEAT_MS : currentEx.id==="flap" ? flapBeat() : SEQ_BEAT_MS;
   let k=0;
   const beat=()=>{
     cells.forEach((c,i)=>c.classList.toggle("hit", i===(k%cells.length)));
@@ -2148,14 +2185,15 @@ function analyzeFlap(buf, mode){
      しきい値を跨いだ区間、という取り方だと、**子音が浅い録音で山がひとつに繋がってしまい**、
      「検出できませんでした」になる。だが浅い子音こそ直したい状態なので、それでは困る。
      そこで平滑化した包絡の**極大**を、最短間隔つきで拾う。谷が浅くても粒は取れる。 */
-  const smW=Math.max(1, Math.round(0.025/(hop/sr)));
+  const beat=flapBeat()/1000;
+  const smW=Math.max(1, Math.round(beat*0.06/(hop/sr)));
   const sm=new Float32Array(N);
   for(let i=0;i<N;i++){
     let a=0,c=0;
     for(let j=Math.max(0,i-smW);j<=Math.min(N-1,i+smW);j++){ a+=rms[j]; c++; }
     sm[i]=a/c;
   }
-  const minSep=Math.max(4, Math.round((FLAP_BEAT_MS/1000)*0.55/(hop/sr)));
+  const minSep=Math.max(3, Math.round(beat*0.55/(hop/sr)));
   const half=Math.round(minSep/2);
   const lowCut=thr*1.2;
   const peaks=[];
@@ -2220,7 +2258,7 @@ function analyzeFlap(buf, mode){
 
   /* --- 採点 ---
      しきい値は暫定。記録がたまったら見直す前提で、数字は詳細欄にそのまま出す。 */
-  const expected = Math.max(1, Math.round(dur/(FLAP_BEAT_MS/1000)));
+  const expected = Math.max(1, Math.round(dur/beat));
   const durScore   = clamp(dur/FLAP_SEC*100);
   const countScore = clamp(100 - Math.abs(peaks.length-expected)/expected*180);
   const tempoScore = clamp(100-(ivCv-0.10)*300);
@@ -2236,7 +2274,8 @@ function analyzeFlap(buf, mode){
       consScore=dScore;
       consDetail="谷 "+depthM.toFixed(1)+"dB（浅くて幅は測れず）";
     }else{
-      const wScore=clamp(100-Math.max(0,widthM-55)*1.6);
+      const wGood=beat*1000*0.14;   // 400ms→56ms / 150ms→21ms
+      const wScore=clamp(100-Math.max(0,widthM-wGood)*1.6*(400/(beat*1000)));
       consScore=Math.round(dScore*0.6+wScore*0.4);
       consDetail="谷 "+depthM.toFixed(1)+"dB・幅 "+widthM.toFixed(0)+"ms";
     }
@@ -2299,7 +2338,7 @@ function evaluateFlap(buf, m, advice){
     alert("粒を検出できませんでした。\n\n「"+mo.ch+"」を止めずに10秒くり返してください。\nマイクから10cmほど離し、はっきり区切って発音すると拾いやすくなります。");
     return;
   }
-  resultLabel="に・る 連続（"+mo.short+"）";
+  resultLabel="に・る 連続（"+mo.short+"・"+currentTempo.ms+"ms）";
   m.push(["10秒つづいたか", r.durScore, r.dur.toFixed(1)+"秒"]);
   m.push(["粒の数", r.countScore, r.count+"粒（目安 "+r.expected+"粒）"]);
   m.push(["テンポの安定", r.tempoScore,
@@ -2332,9 +2371,9 @@ function evaluateFlap(buf, m, advice){
     if(r.depthM<4) advice.push("はじきが浅いです（谷 "+r.depthM.toFixed(1)+"dB）。"
       +"舌先が上あごに届いていないか、触れる時間が長すぎて「ラ」に近くなっています。"
       +"舌先を<b>上の前歯の裏の少し奥に、一瞬だけ</b>当てて弾いてください。");
-    if(r.widthM!==null && r.widthM>70) advice.push("谷が広がっています（幅 "+r.widthM.toFixed(0)+"ms）。"
+    if(r.widthM!==null && r.widthM>flapBeat()*0.18) advice.push("谷が広がっています（幅 "+r.widthM.toFixed(0)+"ms）。"
       +"舌が貼りついて「るー」と伸びている状態です。当てる時間を短く、離すほうを速く。");
-    if(r.depthM>=4 && (r.widthM===null || r.widthM<=70) && r.shapeScore!==null && r.shapeScore>=75)
+    if(r.depthM>=4 && (r.widthM===null || r.widthM<=flapBeat()*0.18) && r.shapeScore!==null && r.shapeScore>=75)
       advice.push("口を止めたまま舌だけで弾けています。<b>これが狙っている状態</b>です。次は同じ質のままテンポを上げましょう。");
   }else{
     if(r.depthM<3) advice.push("子音が立っていません（谷 "+r.depthM.toFixed(1)+"dB）。"
@@ -2560,7 +2599,7 @@ function showResult(score,metrics,advice,kStat){
 // 「クッ（単独）」は v1.7.0 以前と同じキー "k" のままなので、過去の推移が途切れない。
 function histKey(){
   if(currentEx.id==="breath") return "breath:"+currentBreath.id;
-  if(currentEx.id==="flap") return "flap:"+currentFlap.id;
+  if(currentEx.id==="flap") return "flap:"+currentFlap.id+":"+currentTempo.ms;
   if(currentEx.id!=="k") return currentEx.id;
   return currentMora.id==="kq" ? "k" : "k:"+currentMora.id;
 }
@@ -2579,7 +2618,7 @@ function drawChart(){
     : currentEx.id==="breath"
       ? "スコア推移（"+currentBreath.label+"の直近12回）"
       : currentEx.id==="flap"
-        ? "スコア推移（"+currentFlap.label+"の直近12回）"
+        ? "スコア推移（"+currentFlap.label+" "+currentTempo.ms+"ms の直近12回）"
         : "スコア推移（この練習の直近12回）";
   const c=$("chart"), ctx=c.getContext("2d");
   const W=c.width=c.clientWidth*2, H=c.height=240;
