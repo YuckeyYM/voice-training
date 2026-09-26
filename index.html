@@ -86,6 +86,19 @@
   .cmp td,.cmp th{padding:2px 4px; text-align:right; font-variant-numeric:tabular-nums;}
   .cmp th:first-child,.cmp td:first-child{text-align:left;}
   .cmp th{color:var(--sub); font-weight:400;}
+  .vrtext{margin:4px 0 12px; padding:10px 12px; background:#fff; border:1px solid var(--line); border-radius:10px;}
+  .vrtitle{font-size:12px; color:var(--sub); margin-bottom:6px;}
+  .vrline{margin:6px 0 10px;}
+  .vrtext .vrv{color:var(--accent); letter-spacing:.04em;}
+  .vrtext.vow .vrv{font-size:19px; font-weight:700;}
+  .vrtext.vow .vrt{font-size:12px; color:var(--sub);}
+  .vrtext.txt .vrv{font-size:12px;}
+  .vrtext.txt .vrt{font-size:19px; font-weight:700;}
+  .vrteacher{margin:0 0 12px; font-size:13px;}
+  .vrpick{display:inline-block; padding:9px 14px; border-radius:8px; cursor:pointer; background:#efedea; font-size:14px;}
+  .vrturn{display:flex; align-items:center; gap:8px; margin:4px 0; font-size:12px; color:var(--sub);}
+  .vrturn button{padding:5px 10px; font-size:12px;}
+  .cmp button.vrp{padding:3px 8px; font-size:11px;}
 </style>
 </head>
 <body>
@@ -106,6 +119,17 @@
   <div class="moras hidden" id="brRow"></div>
   <div class="moras hidden" id="flRow"></div>
   <div class="moras hidden" id="tpRow"></div>
+  <div class="moras hidden" id="vrRow"></div>
+  <div class="hidden" id="vrBox">
+    <div id="vrText"></div>
+    <div class="vrteacher hidden" id="vrTeacher">
+      <label class="vrpick">手本の録音を選ぶ<input type="file" id="vrFile" accept="audio/*,.m4a,.mp3,.wav" style="display:none"></label>
+      <label class="chk" style="margin-top:8px"><input type="checkbox" id="vrLowChk"> 先生の声のほうが低い（先生が男性のときなど）</label>
+      <div class="status" id="vrStatus"></div>
+      <div id="vrTurns"></div>
+      <div class="privacy">手本の録音はこの端末の中だけに保存します。送信もアップロードもせず、アプリ（GitHub Pages）にも含めていません。</div>
+    </div>
+  </div>
   <canvas class="viz" id="viz"></canvas>
   <div class="pace" id="paceRow"></div>
   <div class="countdown" id="countdown"></div>
@@ -206,9 +230,10 @@
 <script>
 "use strict";
 /* ================= バージョン ================= */
-const APP_VERSION = "v1.15.0";
-const APP_DATE    = "2026-09-19";
+const APP_VERSION = "v1.16.0";
+const APP_DATE    = "2026-09-26";
 const CHANGELOG = [
+  ["v1.16.0","2026-09-26","「母音読み」を追加（① 本文から母音だけを抜いた行を読む → ② 本文を腹式で読む → ③ 先生の録音を1句ずつ流して後について読む。③は抑揚の形・抑揚の幅・リズム・句末の支えを手本と比べて採点。手本は端末内のファイルを選ぶ方式で、アプリには埋め込まない。レッスンの掛け合い録音は声の高さで先生と自分に分け、レッスン中の自分の回も同じ物差しで採点して基準線にする）"],
   ["v1.15.0","2026-09-19","「に・る 連続」にテンポ選択を追加（400/300/200/150ms。150ms は通常の話速で、「じゅうににち」の「にに」に相当。期待粒数・最短間隔・平滑化・谷の幅の基準をすべて拍に連動させ、テンポ別にスコアを記録）"],
   ["v1.14.0","2026-09-19","腹式呼吸に「リップロール（2-2-12）」を追加（2拍吸う→2拍止める→12拍出す、の誘導つき。出す区間だけを採点し、震えの規則性もあわせて見る。1拍=1秒）"],
   ["v1.13.0","2026-09-19","「に・る 連続」を追加（同じ音を10秒くり返す。母音のフォルマントのばらつきから『口の形を固定できているか』を採点。最初の1粒と最後の1粒をカメラで並べて比較）"],
@@ -239,6 +264,7 @@ const EXERCISES = [
  {id:"breath", name:"8. 腹式呼吸", desc:"下から練習の種類を選びます。息を細く長く、最後まで同じ強さで。"},
  {id:"ui", name:"9. ウイウイ", desc:"「う・い・う・い…」を10秒くり返します。イは口を大きく横に、ウはできるだけ小さくすぼめて、切り替えは一瞬で。"},
  {id:"flap", name:"10. に・る 連続", desc:"下から「に」か「る」を選びます。同じ音を10秒つづけます。口の形は変えず、動かすのは舌だけ。"},
+ {id:"vread", name:"11. 母音読み", desc:"下から ①母音で ②本文で ③手本のあとに を選びます。"},
 ];
 
 /* ---- ウイウイ（v1.11.0） ----
@@ -476,6 +502,7 @@ try{
 
 function selectEx(ex,btn){
   if(recording) stopRecording(true);
+  vrAbort();
   currentEx=ex; phaseA=null; kDetail=null;
   document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
   if(btn) btn.classList.add("active");
@@ -491,10 +518,21 @@ function selectEx(ex,btn){
   $("brRow").classList.add("hidden");
   $("flRow").classList.add("hidden");
   $("tpRow").classList.add("hidden");
+  $("vrRow").classList.add("hidden");
+  $("vrBox").classList.add("hidden");
   $("shotRow").classList.add("hidden");
   $("shotCap").classList.add("hidden");
   $("shotOrig").parentElement.style.display = (ex.id==="flap") ? "none" : "";
   if(ex.id!=="ui" && ex.id!=="flap"){ $("camBox").classList.remove("on"); stopCam(); $("camChk").checked=false; }
+  if(ex.id==="vread"){
+    moraRow.classList.add("hidden");
+    $("paceRow").classList.remove("on");
+    $("countdown").classList.remove("on");
+    $("vrRow").classList.remove("hidden");
+    $("vrBox").classList.remove("hidden");
+    selectVR(currentVR);
+    return;
+  }
   if(ex.id==="flap"){
     moraRow.classList.add("hidden");
     $("flRow").classList.remove("hidden");
@@ -595,6 +633,561 @@ function selectFlap(mo){
   $("shotRow").classList.add("hidden");
   $("shotCap").classList.add("hidden");
   drawChart();
+}
+
+/* ================= 母音読み（v1.16.0） =================
+   2026-09-26 のボイトレのレッスンをそのまま移した練習。
+   ① 本文から母音だけを抜き出した行（「ん」はそのまま）を読む
+   ② その流れを保ったまま、本文を腹式で読む
+   ③ 先生の録音を1句ずつ流し、そのあとについて読む（手本のコピー）
+
+   ③の手本は**アプリに埋め込まない。** GitHub Pages は公開なので、埋め込むと先生の声が
+   誰でも聞ける状態になる。端末の録音ファイルを選んでもらい、この端末の中（IndexedDB）にだけ置く。
+
+   レッスンの録音は「先生→自分→先生→自分…」の掛け合いになっている。無音で区切ったうえで
+   **声の高さで2群に分け**、手本の句だけを取り出す。手本だけの録音なら全部が手本になる。
+
+   採点は、声の高さそのもの（男女差・マイクまでの距離）ではなく**形**で比べる。
+   抑揚は各自の中央値からの半音差の推移、リズムは時間をそろえた音量の包絡と長さの比。 */
+const VR_TEXTS = [
+ {id:"typhoon26", title:"台風26号（2026-09-26 のレッスン）",
+  note:"27日は「にじゅうなな」で読んでいます。",
+  lines:[
+   {t:"台風26号（スリゲ）は、26日朝・沖縄の", v:"あいうう いううおうおう（ういえ）あ、いううおういい ああ・おいああお"},
+   {t:"南の海上を進んでいる。",               v:"いあいお あいおうお ううんえいう。"},
+   {t:"勢力を強めて、27・28日ごろに",         v:"えいおうお うおええ、いううああ・いううあいいい おおい"},
+   {t:"沖縄に近づき、その後の進路次第で",     v:"おいああい いあうい、おおおお いんおいあいえ"},
+   {t:"来週以降、九州や四国、本州に近づく",   v:"あいうう いおう、ううううあ いおう、おんううい いあうう"},
+   {t:"可能性がある。",                       v:"あおうえい ああう。"},
+  ]},
+];
+const VR_MODES = [
+ {id:"vow", short:"① 母音で", label:"母音だけで読む",
+  tip:"赤い行（母音だけ）を読みます。「ん」はそのまま。子音を抜くと、息の流れと口の形だけが残ります。"
+     +"<b>句の終わりまで同じ強さで</b>、お腹で支えて声を前に運んでください。"},
+ {id:"txt", short:"② 本文で", label:"本文を腹式で読む",
+  tip:"①の母音の流れを崩さずに、本文を読みます。子音で息を止めず、母音をつないで運ぶつもりで。"
+     +"先に①を録っておくと、①とのリズムの一致も採点します。"},
+ {id:"rep", short:"③ 手本のあとに", label:"手本のあとについて読む",
+  tip:"先生の録音を1句ずつ流します。流れ終わったら、<b>同じ抑揚・同じリズムで</b>続けて読んでください。"
+     +"読み終えて黙ると、次の句へ進みます。<b>イヤホンは外して</b>スピーカーで流してください。"},
+];
+let currentVR = VR_MODES[0];
+let currentVT = VR_TEXTS[0];
+try{
+  const s=localStorage.getItem("vt_vrmode");
+  if(s){ const f=VR_MODES.find(m=>m.id===s); if(f) currentVR=f; }
+}catch(e){}
+let vrVowRef=null;    // 直近の①（②のリズム比較に使う）
+let vrTeacher=null;   // 手本の解析結果
+let vrSession=null;   // ③の実行中の状態
+let vrLast=null;      // ③の直近の結果（聞き比べ用）
+
+VR_MODES.forEach(mo=>{
+  const b=document.createElement("button");
+  b.className="mora"+(mo.id===currentVR.id?" active":"");
+  b.textContent=mo.short;
+  b.dataset.vr=mo.id;
+  b.onclick=()=>selectVR(mo);
+  $("vrRow").appendChild(b);
+});
+function renderVRText(){
+  const box=$("vrText"); box.innerHTML="";
+  box.className="vrtext "+(currentVR.id==="vow"?"vow":"txt");
+  const h=document.createElement("div"); h.className="vrtitle"; h.textContent=currentVT.title; box.appendChild(h);
+  currentVT.lines.forEach(l=>{
+    const d=document.createElement("div"); d.className="vrline";
+    const v=document.createElement("div"); v.className="vrv"; v.textContent=l.v;
+    const t=document.createElement("div"); t.className="vrt"; t.textContent=l.t;
+    d.appendChild(v); d.appendChild(t); box.appendChild(d);
+  });
+  if(currentVT.note){ const n=document.createElement("div"); n.className="kcap"; n.textContent=currentVT.note; box.appendChild(n); }
+}
+function selectVR(mo){
+  if(recording) stopRecording(true);
+  vrAbort();
+  currentVR=mo;
+  try{ localStorage.setItem("vt_vrmode",mo.id); }catch(e){}
+  $("vrRow").querySelectorAll(".mora").forEach(b=>b.classList.toggle("active", b.dataset.vr===mo.id));
+  $("exDesc").innerHTML="【"+mo.label+"】"+mo.tip;
+  renderVRText();
+  $("vrTeacher").classList.toggle("hidden", mo.id!=="rep");
+  $("recBtn").textContent = mo.id==="rep" ? "手本と練習を始める" : "録音スタート";
+  $("resultCard").classList.add("hidden");
+  $("kviz").classList.add("hidden"); $("kcap").classList.add("hidden");
+  $("countdown").classList.remove("on");
+  if(mo.id==="rep") vrLoadStoredTeacher();
+  drawChart();
+}
+
+/* ---- 解析の土台：8kHzに落として10ms刻みで音量（dB）と音程を取る ---- */
+function vrDown(buf, rate){
+  const k=Math.max(1,Math.round(rate/8000));
+  const n=Math.floor(buf.length/k), x=new Float32Array(n);
+  for(let i=0;i<n;i++){ let s=0; for(let j=0;j<k;j++) s+=buf[i*k+j]; x[i]=s/k; }
+  return {x, sr:rate/k};
+}
+function vrPitch(x, st, len, r){
+  let e0=0; for(let i=st;i<st+len;i++) e0+=x[i]*x[i];
+  if(e0<=0) return 0;
+  const minL=Math.floor(r/500), maxL=Math.min(Math.floor(r/60), len-1);
+  let best=0, bl=0;
+  for(let L=minL; L<=maxL; L++){
+    let s=0; for(let i=st;i<st+len-L;i++) s+=x[i]*x[i+L];
+    const v=s/e0; if(v>best){ best=v; bl=L; }
+  }
+  return (best>0.45 && bl>0) ? r/bl : 0;
+}
+/* thrFrom：しきい値をどの区間から決めるか（③は手本の再生音がマイクに入るので、自分の番の区間だけで決める） */
+function vrFrames(buf, rate, thrFrom){
+  const d=vrDown(buf, rate), x=d.x, r=d.sr;
+  const hop=Math.round(r*0.01), win=Math.round(r*0.04);
+  const db=[];
+  for(let i=0;i+win<=x.length;i+=hop){
+    let s=0; for(let j=i;j<i+win;j++) s+=x[j]*x[j];
+    db.push(10*Math.log10(s/win+1e-12));
+  }
+  let pool=db;
+  if(thrFrom && thrFrom.length){
+    pool=[]; thrFrom.forEach(([a,b])=>{ for(let i=Math.max(0,a);i<Math.min(db.length,b);i++) pool.push(db[i]); });
+    if(pool.length<20) pool=db;
+  }
+  const s=pool.slice().sort((a,b)=>a-b);
+  const q=p=>s[Math.max(0,Math.min(s.length-1,Math.round(p*(s.length-1))))];
+  const noise=q(0.10), sig=q(0.90);
+  const thr=noise+(sig-noise)*0.3;
+  const f0=db.map((v,i)=> v>thr ? vrPitch(x, i*hop, win, r) : 0);
+  return {db, f0, thr, hopT:hop/r, n:db.length};
+}
+/* 声が出ている区間を拾う。gap 秒以下の切れ目はつなぎ、minLen 秒未満は捨てる */
+function vrSegments(fr, gap, minLen, from, to){
+  from=from||0; to=(to==null)?fr.n:to;
+  const segs=[]; let i=from;
+  while(i<to){
+    if(fr.db[i]>fr.thr){ let j=i; while(j<to && fr.db[j]>fr.thr) j++; segs.push([i,j]); i=j; }
+    else i++;
+  }
+  const m=[];
+  segs.forEach(s=>{ if(m.length && (s[0]-m[m.length-1][1])*fr.hopT<gap) m[m.length-1][1]=s[1]; else m.push(s.slice()); });
+  return m.filter(s=>(s[1]-s[0])*fr.hopT>=minLen);
+}
+function vrResample(a,n){
+  const out=new Array(n);
+  if(a.length===1){ out.fill(a[0]); return out; }
+  for(let i=0;i<n;i++){
+    const p=i*(a.length-1)/(n-1), k=Math.floor(p), f=p-k;
+    out[i]= k+1<a.length ? a[k]*(1-f)+a[k+1]*f : a[k];
+  }
+  return out;
+}
+function vrMedian(a){ const s=a.slice().sort((x,y)=>x-y); return s.length? s[Math.floor(s.length/2)] : 0; }
+function vrPct(a,p){ const s=a.slice().sort((x,y)=>x-y); return s[Math.max(0,Math.min(s.length-1,Math.round(p*(s.length-1))))]; }
+/* 句1つ分の特徴：抑揚（半音）・幅・包絡・長さ・尻すぼみ */
+function vrFeat(fr, a, b, envN){
+  let s=a; while(s<b && fr.db[s]<=fr.thr) s++;
+  let e=b-1; while(e>s && fr.db[e]<=fr.thr) e--;
+  if(e-s<10) return null;
+  e++;
+  const env=[]; for(let i=s;i<e;i++) env.push(Math.max(fr.db[i], fr.thr));
+  const fv=[]; for(let i=s;i<e;i++) if(fr.f0[i]>0) fv.push(fr.f0[i]);
+  let st=null, range=null;
+  if(fv.length>=8){
+    const med=vrMedian(fv);
+    const raw=[]; for(let i=s;i<e;i++){
+      const f=fr.f0[i]; let v=NaN;
+      if(f>0){ v=12*Math.log2(f/med); if(Math.abs(v)>7) v=NaN; }   // オクターブ誤りを落とす
+      raw.push(v);
+    }
+    const ok=raw.map(v=>!isNaN(v));
+    const valid=raw.filter(v=>!isNaN(v));
+    if(valid.length>=8){
+      range=vrPct(valid,0.9)-vrPct(valid,0.1);
+      // 無声の区間は前後の値で補間
+      const filled=raw.slice(); let last=-1;
+      for(let i=0;i<filled.length;i++){
+        if(ok[i]){
+          if(last<0){ for(let j=0;j<i;j++) filled[j]=raw[i]; }
+          else if(i-last>1){ for(let j=last+1;j<i;j++) filled[j]=raw[last]+(raw[i]-raw[last])*(j-last)/(i-last); }
+          last=i;
+        }
+      }
+      for(let j=last+1;j<filled.length;j++) filled[j]=raw[last];
+      const sm=filled.map((v,i)=>{ let t=0,c=0; for(let k=i-2;k<=i+2;k++) if(k>=0&&k<filled.length){ t+=filled[k]; c++; } return t/c; });
+      st=vrResample(sm,60);
+    }
+  }
+  const vd=[]; for(let i=s;i<e;i++) if(fr.db[i]>fr.thr) vd.push(fr.db[i]);
+  const q=Math.floor(vd.length/4);
+  const drop = q>=3 ? mean(vd.slice(0,vd.length-q))-mean(vd.slice(vd.length-q)) : null;
+  return {st, range, env:vrResample(env, envN||80), dur:(e-s)*fr.hopT, drop, level:mean(vd),
+          voicedFrac: vd.length/(e-s), s, e};
+}
+/* 句末の支え：句の最後の4分の1が前半より何dB落ちたか。2dB以内は満点、9dBで0点 */
+function vrSupScore(drop){ return drop==null ? null : clamp(100-(drop-2)*100/7); }
+function vrRhythm(T,U){
+  const ec=pearson(T.env,U.env);
+  const envS=clamp((ec-0.2)/0.55*100);
+  const ratio=U.dur/T.dur;
+  const durS=clamp(100-Math.max(0,Math.abs(Math.log2(ratio))-0.08)*100/0.5);
+  return {score:Math.round(envS*0.6+durS*0.4), ec, ratio};
+}
+function vrCompare(T,U){
+  const out={};
+  if(T.st && U.st){
+    out.pc=pearson(T.st,U.st);
+    out.intS=clamp((out.pc-0.3)/0.6*100);
+  }
+  if(T.range && U.range){
+    out.rr=U.range/T.range;
+    out.rngS=clamp(100-Math.max(0,Math.abs(Math.log2(out.rr))-0.15)*100/0.6);
+  }
+  const rh=vrRhythm(T,U); out.rhS=rh.score; out.ec=rh.ec; out.ratio=rh.ratio;
+  out.supS=vrSupScore(U.drop); out.drop=U.drop; out.tdrop=T.drop;
+  const parts=[[out.intS,0.35],[out.rngS,0.15],[out.rhS,0.30],[out.supS,0.20]].filter(p=>p[0]!=null);
+  const w=parts.reduce((a,p)=>a+p[1],0);
+  out.score=Math.round(parts.reduce((a,p)=>a+p[0]*p[1],0)/(w||1));
+  return out;
+}
+
+/* ---- 手本の読み込み ---- */
+$("vrFile").onchange=async e=>{
+  const f=e.target.files && e.target.files[0];
+  if(!f) return;
+  $("vrStatus").textContent="読み込み中…";
+  try{
+    const ab=await f.arrayBuffer();
+    try{ await idb.set("vr_teacher:"+currentVT.id, {name:f.name, data:ab.slice(0)}); }catch(err){}
+    await vrPrepareTeacher(f.name, ab);
+  }catch(err){ $("vrStatus").textContent="読み込めませんでした: "+err.message; }
+  e.target.value="";
+};
+$("vrLowChk").onchange=e=>{
+  try{ localStorage.setItem("vt_vrlow", e.target.checked?"1":"0"); }catch(err){}
+  if(vrTeacher){ vrLabelTurns(vrTeacher); vrRenderTurns(); }
+};
+try{ $("vrLowChk").checked = localStorage.getItem("vt_vrlow")==="1"; }catch(e){}
+async function vrLoadStoredTeacher(){
+  if(vrTeacher && vrTeacher.textId===currentVT.id){ vrRenderTurns(); return; }
+  try{
+    const r=await idb.get("vr_teacher:"+currentVT.id);
+    if(r && r.data){ await vrPrepareTeacher(r.name, r.data); return; }
+  }catch(e){}
+  $("vrStatus").textContent="手本：未選択。レッスンの録音ファイル（m4a など）を選んでください。";
+  $("vrTurns").innerHTML="";
+}
+async function vrDecode(ab){
+  // OfflineAudioContext で復号する（マイクの音声セッションに触らない）
+  const oc=new (window.OfflineAudioContext||window.webkitOfflineAudioContext)(1, 44100, 44100);
+  return await new Promise((res,rej)=>{
+    const p=oc.decodeAudioData(ab.slice(0), res, rej);
+    if(p && p.then) p.then(res,rej);
+  });
+}
+async function vrPrepareTeacher(name, ab){
+  $("vrStatus").textContent="解析中…（数秒かかります）";
+  await new Promise(r=>setTimeout(r,30));
+  const d=await vrDecode(ab);
+  const n=d.length, x=new Float32Array(n);
+  for(let c=0;c<d.numberOfChannels;c++){ const ch=d.getChannelData(c); for(let i=0;i<n;i++) x[i]+=ch[i]/d.numberOfChannels; }
+  let pk=0; for(let i=0;i<n;i++){ const a=Math.abs(x[i]); if(a>pk) pk=a; }
+  if(pk>0) for(let i=0;i<n;i++) x[i]*=0.9/pk;
+  const fr=vrFrames(x, d.sampleRate);
+  const segs=vrSegments(fr, 0.12, 0.3).map(([a,b])=>{
+    const fv=[]; for(let i=a;i<b;i++) if(fr.f0[i]>0) fv.push(fr.f0[i]);
+    return {a,b,f0:fv.length?vrMedian(fv):0};
+  }).filter(s=>s.f0>0);
+  vrTeacher={textId:currentVT.id, name, x, sr:d.sampleRate, fr, segs};
+  vrLabelTurns(vrTeacher);
+  vrRenderTurns();
+}
+/* 句を声の高さで2群に分け、同じ人の続きはまとめて1ターンにする */
+function vrLabelTurns(T){
+  const lf=T.segs.map(s=>Math.log(s.f0));
+  let c1=Math.min(...lf), c2=Math.max(...lf), lab=lf.map(()=>true);
+  const two = Math.exp(c2-c1) > 1.25;
+  if(two){
+    for(let it=0;it<20;it++){
+      lab=lf.map(v=>Math.abs(v-c2)<Math.abs(v-c1));   // true＝高い群
+      const h=lf.filter((v,i)=>lab[i]), l=lf.filter((v,i)=>!lab[i]);
+      if(!h.length||!l.length) break;
+      c2=mean(h); c1=mean(l);
+    }
+  }
+  const low=$("vrLowChk").checked;
+  const turns=[];
+  T.segs.forEach((s,i)=>{
+    const teacher = two ? (low ? !lab[i] : lab[i]) : true;
+    const last=turns[turns.length-1];
+    if(last && last.teacher===teacher && (s.a-last.b)*T.fr.hopT<1.2){ last.b=s.b; }
+    else turns.push({a:s.a, b:s.b, teacher});
+  });
+  turns.forEach(t=>{ t.feat=vrFeat(T.fr, t.a, t.b); t.dur=(t.b-t.a)*T.fr.hopT; });
+  T.turns=turns; T.two=two;
+  vrLessonRef(T);
+}
+/* レッスン中の自分の回（手本の直後のターン）も同じ物差しで採点して、比較の基準にする */
+function vrLessonRef(T){
+  const sc=[];
+  for(let i=0;i+1<T.turns.length;i++){
+    const a=T.turns[i], b=T.turns[i+1];
+    if(a.teacher && !b.teacher && a.feat && b.feat) sc.push(vrCompare(a.feat,b.feat).score);
+  }
+  T.lessonScore = sc.length ? Math.round(mean(sc)) : null;
+}
+function vrTeacherTurns(){ return vrTeacher ? vrTeacher.turns.filter(t=>t.teacher && t.feat) : []; }
+function vrRenderTurns(){
+  const T=vrTeacher; if(!T) return;
+  const tt=vrTeacherTurns();
+  $("vrStatus").innerHTML="手本：<b>"+T.name.replace(/[<>&]/g,"")+"</b>（"+(T.x.length/T.sr).toFixed(0)+"秒）— 手本 "+tt.length+"句"
+    +(T.two ? "・声の高さで先生と自分を分けました" : "・全部を手本として扱います")
+    +(T.lessonScore!=null ? "<br>レッスン中のあなた：<b>"+T.lessonScore+"点</b>（同じ物差しで採点。練習の基準線）" : "");
+  const box=$("vrTurns"); box.innerHTML="";
+  T.turns.forEach((t,i)=>{
+    const row=document.createElement("div"); row.className="vrturn"+(t.teacher?" t":"");
+    const pb=document.createElement("button"); pb.className="plain"; pb.textContent="▶";
+    pb.onclick=()=>vrPlaySlice(T.x, T.sr, t.a*T.fr.hopT, t.b*T.fr.hopT);
+    const rb=document.createElement("button"); rb.className=t.teacher?"ghost":"plain";
+    rb.textContent=t.teacher?"手本":"自分";
+    rb.title="押すと手本／自分を入れ替えます";
+    rb.onclick=()=>{ t.teacher=!t.teacher; vrLessonRef(T); vrRenderTurns(); };
+    const lb=document.createElement("span");
+    lb.textContent=(t.a*T.fr.hopT).toFixed(1)+"–"+(t.b*T.fr.hopT).toFixed(1)+"秒（"+t.dur.toFixed(1)+"秒）";
+    row.appendChild(pb); row.appendChild(rb); row.appendChild(lb); box.appendChild(row);
+  });
+}
+let vrPlayingSrc=null;
+function vrStopPlay(){ try{ if(vrPlayingSrc) vrPlayingSrc.stop(); }catch(e){} vrPlayingSrc=null; }
+async function vrPlaySlice(x, rate, t0, t1){
+  vrStopPlay();
+  if(!audioCtx || audioCtx.state==="closed"){
+    // 再生だけならマイクは要らない。録音を始めるときに ensureAudio が作り直す
+    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  }
+  if(audioCtx.state==="suspended"){ try{ await audioCtx.resume(); }catch(e){} }
+  const a=Math.max(0,Math.floor(t0*rate)), b=Math.min(x.length,Math.ceil(t1*rate));
+  if(b-a<10) return null;
+  const ab=audioCtx.createBuffer(1, b-a, rate);
+  ab.getChannelData(0).set(x.subarray(a,b));
+  const src=audioCtx.createBufferSource();
+  src.buffer=ab; src.connect(audioCtx.destination);
+  vrPlayingSrc=src;
+  const done=new Promise(res=>{ src.onended=res; });
+  src.start();
+  return done;
+}
+
+/* ---- ③ 手本のあとについて読む ---- */
+function vrSleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+function vrLiveDb(){
+  if(!analyser) return -100;
+  const d=new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(d);
+  let s=0; for(let i=0;i<d.length;i++) s+=d[i]*d[i];
+  return 10*Math.log10(s/d.length+1e-12);
+}
+/* 自分の番の終わりを決める。話し始めたあと 0.9秒黙れば次へ。
+   しきい値は、手本が鳴り終わった直後の静けさを基準にする（端末ごとの録音レベル差をよけるため） */
+async function vrWaitTurn(tDur, s){
+  const t0=performance.now();
+  const maxT=tDur*1.8+1.5, minT=Math.max(0.8, tDur*0.5);
+  let floor=100; const early=[];
+  let spoke=false, lastLoud=0;
+  while(!s.aborted){
+    await vrSleep(50);
+    const el=(performance.now()-t0)/1000;
+    const v=vrLiveDb();
+    if(el<0.25){ early.push(v); floor=Math.min(...early); continue; }
+    const thr=Math.max(floor+12, -55);
+    if(v>thr){ spoke=true; lastLoud=el; }
+    const left=Math.max(0,maxT-el);
+    $("countdown").textContent="あなたの番（"+(s.k+1)+"/"+s.n+"）"+(spoke?"":"　どうぞ")+"　残り "+left.toFixed(0)+"秒";
+    if(el>=maxT) return;
+    if(spoke && el>=minT && el-lastLoud>=0.9) return;
+  }
+}
+function vrAbort(){
+  if(!vrSession) return;
+  vrSession.aborted=true;
+  vrStopPlay();
+  try{ if(vrSession.rec && vrSession.rec.state!=="inactive") vrSession.rec.stop(); }catch(e){}
+  if(!useMR) recording=false;
+  vrSession=null;
+  $("countdown").classList.remove("on");
+  $("recBtn").classList.remove("rec");
+  if(currentEx.id==="vread") $("recBtn").textContent = currentVR.id==="rep" ? "手本と練習を始める" : "録音スタート";
+}
+async function vrStartSession(){
+  const tt=vrTeacherTurns();
+  if(!tt.length){ alert("先に先生の録音ファイルを選んでください（下の「手本の録音を選ぶ」）。"); return; }
+  try{ await ensureAudio(); }catch(err){ alert("マイクを使用できません: "+err.message); return; }
+  if(audioCtx.state==="suspended") await audioCtx.resume();
+  $("micWarn").classList.add("hidden");
+  $("resultCard").classList.add("hidden");
+  const s={k:0, n:tt.length, windows:[], chunks:[], aborted:false, rec:null};
+  vrSession=s;
+  $("recBtn").textContent="中止"; $("recBtn").classList.add("rec");
+  $("countdown").classList.add("on");
+  if(useMR){
+    try{
+      const mime=pickMime();
+      s.rec = mime ? new MediaRecorder(mediaStream,{mimeType:mime}) : new MediaRecorder(mediaStream);
+      s.rec.ondataavailable=e=>{ if(e.data && e.data.size) s.chunks.push(e.data); };
+      s.rec.start();
+    }catch(err){ alert("録音の開始に失敗しました: "+err.message); vrAbort(); return; }
+  }else{ recSamples=[]; recording=true; }
+  s.t0=performance.now();
+  const T=vrTeacher;
+  for(let k=0;k<tt.length;k++){
+    if(s.aborted) return;
+    s.k=k;
+    const t=tt[k];
+    $("countdown").textContent="手本 "+(k+1)+"/"+tt.length+" を聞いてください";
+    const done=await vrPlaySlice(T.x, T.sr, t.a*T.fr.hopT, t.b*T.fr.hopT);
+    if(done) await done;
+    if(s.aborted) return;
+    await vrSleep(120);
+    const w0=(performance.now()-s.t0)/1000;
+    await vrWaitTurn(t.dur, s);
+    if(s.aborted) return;
+    s.windows.push([w0,(performance.now()-s.t0)/1000]);
+  }
+  $("countdown").textContent="採点中…";
+  let buf=null, rate=sr;
+  if(useMR){
+    const stopped=new Promise(res=>{ s.rec.onstop=res; });
+    try{ s.rec.stop(); }catch(e){}
+    await stopped;
+    try{
+      const blob=new Blob(s.chunks,{type:(s.rec.mimeType||"audio/mp4")});
+      const dec=await audioCtx.decodeAudioData(await blob.arrayBuffer());
+      buf=dec.getChannelData(0); rate=dec.sampleRate;
+    }catch(err){ alert("録音の解析に失敗しました: "+err.message); vrAbort(); return; }
+  }else{
+    recording=false;
+    const total=recSamples.reduce((a,b)=>a+b.length,0);
+    buf=new Float32Array(total); let off=0;
+    for(const c of recSamples){ buf.set(c,off); off+=c.length; }
+  }
+  vrSession=null;
+  $("recBtn").classList.remove("rec"); $("recBtn").textContent="手本と練習を始める";
+  $("countdown").classList.remove("on");
+  vrEvaluateRep(buf, rate, s.windows, tt);
+}
+function vrEvaluateRep(buf, rate, windows, tt){
+  let pk=0; for(let i=0;i<buf.length;i++){ const a=Math.abs(buf[i]); if(a>pk) pk=a; }
+  if(pk<0.0015){ alert("声が検出できませんでした。マイクが他のアプリに取られていないか確認してください。"); return; }
+  recPeakDb=20*Math.log10(pk);
+  const x=new Float32Array(buf.length); for(let i=0;i<buf.length;i++) x[i]=buf[i]*0.9/pk;
+  // 窓（秒）→フレーム番号。録音の開始遅れの分だけ少し広めに取る
+  const probe=vrDown(x.subarray(0,Math.min(x.length,rate)),rate);
+  const hopT=Math.round(probe.sr*0.01)/probe.sr;
+  const win=windows.map(([a,b])=>[Math.max(0,Math.floor((a-0.05)/hopT)), Math.ceil((b+0.1)/hopT)]);
+  const fr=vrFrames(x, rate, win);
+  const rows=[];
+  win.forEach(([a,b],k)=>{
+    const segs=vrSegments(fr, 0.3, 0.3, a, Math.min(b,fr.n));
+    const U = segs.length ? vrFeat(fr, segs[0][0], segs[segs.length-1][1]) : null;
+    const T = tt[k].feat;
+    rows.push({k, T, U, c: U ? vrCompare(T,U) : null, u0:U?U.s*fr.hopT:0, u1:U?U.e*fr.hopT:0, t:tt[k]});
+  });
+  const ok=rows.filter(r=>r.c);
+  if(!ok.length){ alert("自分の声を検出できませんでした。手本が終わってから、はっきり読んでください。"); return; }
+  const avg=key=>{ const v=ok.map(r=>r.c[key]).filter(v=>v!=null); return v.length? Math.round(mean(v)) : null; };
+  const m=[], advice=[];
+  const intS=avg("intS"), rngS=avg("rngS"), rhS=avg("rhS"), supS=avg("supS");
+  const rr=ok.map(r=>r.c.rr).filter(v=>v!=null), ratio=ok.map(r=>r.c.ratio);
+  const drops=ok.map(r=>r.c.drop).filter(v=>v!=null);
+  if(intS!=null) m.push(["抑揚の一致",intS,"形の相関 "+Math.round(mean(ok.map(r=>r.c.pc).filter(v=>v!=null))*100)+"%"]);
+  if(rngS!=null) m.push(["抑揚の幅",rngS,"手本の "+Math.round(mean(rr)*100)+"%"]);
+  m.push(["リズムの一致",rhS,"長さ 手本の "+Math.round(mean(ratio)*100)+"%"]);
+  if(supS!=null) m.push(["句末の支え",supS,"句末で −"+mean(drops).toFixed(1)+"dB"]);
+  m.push(["読めた句",clamp(ok.length/rows.length*100),ok.length+"/"+rows.length+"句"]);
+  const parts=[[intS,0.35],[rngS,0.15],[rhS,0.30],[supS,0.20]].filter(p=>p[0]!=null);
+  let score=Math.round(parts.reduce((a,p)=>a+p[0]*p[1],0)/parts.reduce((a,p)=>a+p[1],0));
+  score=Math.round(score*ok.length/rows.length);
+  const worst=(key)=>{ let w=null; ok.forEach(r=>{ if(r.c[key]!=null && (w==null || r.c[key]<w.c[key])) w=r; }); return w; };
+  if(intS!=null && intS<60){ const w=worst("intS"); advice.push("抑揚の形が手本とずれています（いちばん離れたのは "+(w.k+1)+"句目）。どこで上がってどこで下がるかを、手本だけ聞き直してから真似てください。"); }
+  if(rngS!=null && rngS<60) advice.push(mean(rr)<1
+    ? "抑揚が手本より平らです（幅は手本の "+Math.round(mean(rr)*100)+"%）。高いところをもう一段高く、落とすところははっきり落として。"
+    : "抑揚が手本より大きく振れています（幅は手本の "+Math.round(mean(rr)*100)+"%）。上げ下げを手本の大きさまで抑えましょう。");
+  if(rhS<60) advice.push(mean(ratio)>1.15
+    ? "手本より遅く、間延びしています（長さ "+Math.round(mean(ratio)*100)+"%）。母音を伸ばしすぎず、手本の速さで運んでください。"
+    : mean(ratio)<0.87 ? "手本より速く、詰まっています（長さ "+Math.round(mean(ratio)*100)+"%）。母音の長さを手本にそろえて。"
+    : "長さは合っていますが、強弱の置きどころが手本と違います。どの語を立てているかを手本で確かめてください。");
+  if(supS!=null && supS<60) advice.push("句の終わりで声が落ちています（平均 −"+mean(drops).toFixed(1)+"dB）。最後の母音まで息を残し、お腹で押し出すつもりで。");
+  if(ok.length<rows.length) advice.push((rows.length-ok.length)+"句で声を拾えませんでした。手本が鳴り終わってから読み始めてください。");
+  if(vrTeacher && vrTeacher.lessonScore!=null) advice.push("レッスン中のあなたは同じ物差しで "+vrTeacher.lessonScore+"点でした。"+(score>=vrTeacher.lessonScore?"今日はそれを上回っています。":"まずはそこを目標に。"));
+  if(!advice.length) advice.push("手本によく付いていけています。次は句の終わりまで同じ強さで。");
+  resultLabel="母音読み（手本のあとに）";
+  vrLast={x, rate, rows};
+  showResult(score,m,advice,null);
+  $("kviz").classList.add("hidden"); $("kcap").classList.add("hidden");
+  vrRenderRows(rows);
+}
+function vrRenderRows(rows){
+  const box=$("cmpBox");
+  const f=v=>v==null?"–":v;
+  let h="<b>句ごとの内訳</b>（▶ で手本と自分を聞き比べ）<table><tr><th>句</th><th>抑揚</th><th>幅</th><th>リズム</th><th>長さ</th><th>支え</th><th></th></tr>";
+  rows.forEach((r,i)=>{
+    const c=r.c;
+    h+="<tr><td>"+(i+1)+"</td>"
+      +(c ? "<td>"+f(c.intS)+"</td><td>"+f(c.rngS)+"</td><td>"+c.rhS+"</td><td>"+Math.round(c.ratio*100)+"%</td><td>"+f(c.supS)+"</td>"
+          : "<td colspan=5>声を拾えませんでした</td>")
+      +"<td><button class='plain vrp' data-i='"+i+"' data-w='t'>手本</button> "
+      +(c?"<button class='plain vrp' data-i='"+i+"' data-w='u'>自分</button>":"")+"</td></tr>";
+  });
+  h+="</table>";
+  box.innerHTML=h;
+  box.classList.remove("hidden");
+  box.querySelectorAll(".vrp").forEach(b=>{
+    b.onclick=()=>{
+      const r=rows[+b.dataset.i];
+      if(b.dataset.w==="t"){ const T=vrTeacher; vrPlaySlice(T.x,T.sr,r.t.a*T.fr.hopT,r.t.b*T.fr.hopT); }
+      else if(vrLast) vrPlaySlice(vrLast.x, vrLast.rate, Math.max(0,r.u0-0.1), r.u1+0.15);
+    };
+  });
+}
+
+/* ---- ①② 一人で読む ---- */
+function evaluateVRead(buf, m, advice){
+  const fr=vrFrames(buf, sr);
+  const segs=vrSegments(fr, 0.25, 0.4);
+  if(!segs.length){ alert("声を検出できませんでした。マイクに近づいて、もう一度読んでください。"); return; }
+  const feats=segs.map(([a,b])=>vrFeat(fr,a,b)).filter(Boolean);
+  const drops=feats.map(f=>f.drop).filter(v=>v!=null);
+  const supS = drops.length ? clamp(mean(drops.map(d=>vrSupScore(d)))) : 50;
+  const lv=feats.map(f=>f.level);
+  const sd = lv.length>1 ? stdev(lv) : 0;
+  const lvS = clamp(100-(sd-1.5)*100/4.5);
+  const whole=vrFeat(fr, segs[0][0], segs[segs.length-1][1], 200);
+  m.push(["句末の支え",supS,drops.length?"句末で −"+mean(drops).toFixed(1)+"dB（"+drops.length+"句）":"–"]);
+  m.push(["句ごとの音量のそろい",lvS,"ばらつき "+sd.toFixed(1)+"dB"]);
+  let score;
+  if(currentVR.id==="vow"){
+    const vf=mean(feats.map(f=>f.voicedFrac));
+    const lgS=clamp((vf-0.75)/0.2*100);
+    m.push(["母音のつながり",lgS,"句の中で声が出ている割合 "+Math.round(vf*100)+"%"]);
+    score=Math.round(supS*0.45+lvS*0.25+lgS*0.30);
+    if(lgS<60) advice.push("母音の流れが途切れています（声が出ている割合 "+Math.round(vf*100)+"%）。母音読みには子音がないので、本来は切れ目なくつながります。句の中では息を止めず、口の形だけを動かしてください。");
+    vrVowRef={t:Date.now(), textId:currentVT.id, whole};
+    resultLabel="母音読み（① 母音で）";
+  }else{
+    const ref = (vrVowRef && vrVowRef.textId===currentVT.id && Date.now()-vrVowRef.t<60*60*1000) ? vrVowRef : null;
+    if(ref && whole){
+      const rh=vrRhythm(ref.whole, whole);
+      m.push(["①とのリズムの一致",rh.score,"長さ ①の "+Math.round(rh.ratio*100)+"%"]);
+      score=Math.round(supS*0.4+lvS*0.3+rh.score*0.3);
+      if(rh.score<60) advice.push("①の母音読みとリズムが変わっています（長さ ①の "+Math.round(rh.ratio*100)+"%）。子音が入っても、母音の長さと流れは①と同じ、を意識してください。");
+    }else{
+      score=Math.round(supS*0.55+lvS*0.45);
+      advice.push("先に①（母音で）を録ると、①とのリズムの一致も採点します。");
+    }
+    resultLabel="母音読み（② 本文で）";
+  }
+  if(supS<60) advice.push("句の終わりで声が落ちています（平均 −"+mean(drops).toFixed(1)+"dB）。最後の母音まで息を残し、お腹で押し出すつもりで。");
+  if(lvS<60) advice.push("句ごとの音量がそろっていません（ばらつき "+sd.toFixed(1)+"dB）。息継ぎのたびにお腹で吸い直して、毎回同じ強さで入りましょう。");
+  if(!advice.length) advice.push("よく支えられています。次は③で手本の抑揚に合わせてみましょう。");
+  showResult(score,m,advice,null);
+  $("kviz").classList.add("hidden"); $("kcap").classList.add("hidden");
 }
 
 /* に・る：カメラは鏡。最初の1粒と最後の1粒を1枚ずつ残して並べる。
@@ -704,6 +1297,10 @@ function pickMime(){
 }
 let recPhase="single"; // single | A | B
 $("recBtn").onclick=async()=>{
+  if(currentEx.id==="vread" && currentVR.id==="rep"){
+    if(vrSession){ vrAbort(); return; }
+    vrStartSession(); return;
+  }
   if(recording){ stopRecording(); return; }
   try{ await ensureAudio(); }catch(err){ alert("マイクを使用できません: "+err.message); return; }
   if(audioCtx.state==="suspended") await audioCtx.resume();
@@ -2447,6 +3044,7 @@ function evaluate(buf){
   if(ex==="breath"){ evaluateBreath(buf,m,advice); return; }
   if(ex==="ui"){ evaluateUI(buf,m,advice); return; }
   if(ex==="flap"){ evaluateFlap(buf,m,advice); return; }
+  if(ex==="vread"){ evaluateVRead(buf,m,advice); return; }
   const an=analyzeBuffer(buf);
   if(ex==="lip" || ex==="roll"){
     const dur=voicedDuration(an);
@@ -2600,6 +3198,7 @@ function showResult(score,metrics,advice,kStat){
 function histKey(){
   if(currentEx.id==="breath") return "breath:"+currentBreath.id;
   if(currentEx.id==="flap") return "flap:"+currentFlap.id+":"+currentTempo.ms;
+  if(currentEx.id==="vread") return "vread:"+currentVR.id+":"+currentVT.id;
   if(currentEx.id!=="k") return currentEx.id;
   return currentMora.id==="kq" ? "k" : "k:"+currentMora.id;
 }
@@ -2619,7 +3218,9 @@ function drawChart(){
       ? "スコア推移（"+currentBreath.label+"の直近12回）"
       : currentEx.id==="flap"
         ? "スコア推移（"+currentFlap.label+" "+currentTempo.ms+"ms の直近12回）"
-        : "スコア推移（この練習の直近12回）";
+        : currentEx.id==="vread"
+          ? "スコア推移（母音読み "+currentVR.short+" の直近12回）"
+          : "スコア推移（この練習の直近12回）";
   const c=$("chart"), ctx=c.getContext("2d");
   const W=c.width=c.clientWidth*2, H=c.height=240;
   ctx.clearRect(0,0,W,H);
