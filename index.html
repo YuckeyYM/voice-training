@@ -119,6 +119,7 @@
   <div class="moras hidden" id="brRow"></div>
   <div class="moras hidden" id="flRow"></div>
   <div class="moras hidden" id="tpRow"></div>
+  <div class="moras hidden" id="vtRow"></div>
   <div class="moras hidden" id="vrRow"></div>
   <div class="hidden" id="vrBox">
     <div id="vrText"></div>
@@ -230,9 +231,10 @@
 <script>
 "use strict";
 /* ================= バージョン ================= */
-const APP_VERSION = "v1.16.0";
-const APP_DATE    = "2026-09-26";
+const APP_VERSION = "v1.17.0";
+const APP_DATE    = "2026-10-03";
 const CHANGELOG = [
+  ["v1.17.0","2026-10-03","「母音読み」に2つ追加（① 文章を選べるようにし、2026-10-03 のレッスンの文章「アジア大会・レスリング」を追加。② ①②の採点に「響き」と「倍音の澄み」を追加。響きは声が出ている区間の平均スペクトルで、2〜4kHz（耳が最も敏感で、声が通るかを決める帯域）が 50Hz〜1kHz より何dB低いか。澄みは同じ 2〜4kHz の中で、倍音の山が山と山のあいだの谷より何dB高いか。息の雑音で明るく聞かせても澄みは上がらないので、澄みが低いときは響きを澄みの点までしか数えない。結果の下に倍音の分布（平均スペクトル）を表示。どちらもマイクの特性で絶対値が変わるため、同じ端末どうしで推移を見る）"],
   ["v1.16.0","2026-09-26","「母音読み」を追加（① 本文から母音だけを抜いた行を読む → ② 本文を腹式で読む → ③ 先生の録音を1句ずつ流して後について読む。③は抑揚の形・抑揚の幅・リズム・句末の支えを手本と比べて採点。手本は端末内のファイルを選ぶ方式で、アプリには埋め込まない。レッスンの掛け合い録音は声の高さで先生と自分に分け、レッスン中の自分の回も同じ物差しで採点して基準線にする）"],
   ["v1.15.0","2026-09-19","「に・る 連続」にテンポ選択を追加（400/300/200/150ms。150ms は通常の話速で、「じゅうににち」の「にに」に相当。期待粒数・最短間隔・平滑化・谷の幅の基準をすべて拍に連動させ、テンポ別にスコアを記録）"],
   ["v1.14.0","2026-09-19","腹式呼吸に「リップロール（2-2-12）」を追加（2拍吸う→2拍止める→12拍出す、の誘導つき。出す区間だけを採点し、震えの規則性もあわせて見る。1拍=1秒）"],
@@ -264,7 +266,7 @@ const EXERCISES = [
  {id:"breath", name:"8. 腹式呼吸", desc:"下から練習の種類を選びます。息を細く長く、最後まで同じ強さで。"},
  {id:"ui", name:"9. ウイウイ", desc:"「う・い・う・い…」を10秒くり返します。イは口を大きく横に、ウはできるだけ小さくすぼめて、切り替えは一瞬で。"},
  {id:"flap", name:"10. に・る 連続", desc:"下から「に」か「る」を選びます。同じ音を10秒つづけます。口の形は変えず、動かすのは舌だけ。"},
- {id:"vread", name:"11. 母音読み", desc:"下から ①母音で ②本文で ③手本のあとに を選びます。"},
+ {id:"vread", name:"11. 母音読み", desc:"下から 文章 と ①母音で ②本文で ③手本のあとに を選びます。①②では声の響き（2〜4kHzの倍音）も測ります。"},
 ];
 
 /* ---- ウイウイ（v1.11.0） ----
@@ -519,6 +521,7 @@ function selectEx(ex,btn){
   $("flRow").classList.add("hidden");
   $("tpRow").classList.add("hidden");
   $("vrRow").classList.add("hidden");
+  $("vtRow").classList.add("hidden");
   $("vrBox").classList.add("hidden");
   $("shotRow").classList.add("hidden");
   $("shotCap").classList.add("hidden");
@@ -529,6 +532,7 @@ function selectEx(ex,btn){
     $("paceRow").classList.remove("on");
     $("countdown").classList.remove("on");
     $("vrRow").classList.remove("hidden");
+    $("vtRow").classList.remove("hidden");
     $("vrBox").classList.remove("hidden");
     selectVR(currentVR);
     return;
@@ -650,7 +654,7 @@ function selectFlap(mo){
    採点は、声の高さそのもの（男女差・マイクまでの距離）ではなく**形**で比べる。
    抑揚は各自の中央値からの半音差の推移、リズムは時間をそろえた音量の包絡と長さの比。 */
 const VR_TEXTS = [
- {id:"typhoon26", title:"台風26号（2026-09-26 のレッスン）",
+ {id:"typhoon26", short:"台風26号", title:"台風26号（2026-09-26 のレッスン）",
   note:"27日は「にじゅうなな」で読んでいます。",
   lines:[
    {t:"台風26号（スリゲ）は、26日朝・沖縄の", v:"あいうう いううおうおう（ういえ）あ、いううおういい ああ・おいああお"},
@@ -659,6 +663,17 @@ const VR_TEXTS = [
    {t:"沖縄に近づき、その後の進路次第で",     v:"おいああい いあうい、おおおお いんおいあいえ"},
    {t:"来週以降、九州や四国、本州に近づく",   v:"あいうう いおう、ううううあ いおう、おんううい いあうう"},
    {t:"可能性がある。",                       v:"あおうえい ああう。"},
+  ]},
+ {id:"asiad57", short:"アジア大会", title:"アジア大会・レスリング（2026-10-03 のレッスン）",
+  note:"57kg級は「ごじゅうななキロきゅう」、2017年は「にせんじゅうななねん」、155は「ひゃくごじゅうご」で読んでいます。"
+      +"レッスンのテーマは「響いている・こもっていない・倍音・かつぜつ」。",
+  lines:[
+   {t:"あいち・なごやアジア大会は3日、",             v:"あいい・あおあ あいあ あいあいあ いっあ、"},
+   {t:"なごや市スポーツセンターでレスリングがあり、", v:"あおあい うおーう えんあーえ えういんう あ あい、"},
+   {t:"女子57kg級の藤波朱理が準決勝で",             v:"おい おううああ いおうう お ういあい うい あ うんえっおう え"},
+   {t:"北朝鮮選手にフォール負けを喫し、",           v:"いあおうえん えんうい おーう あえ お いっい、"},
+   {t:"中学2年だった2017年から続く公式戦の",       v:"ううあう いえん あっあ いえんううああえん ああ ううう おういいえん お"},
+   {t:"連勝が155で止まった。",                      v:"えんおうあ あうおううお え おあっあ。"},
   ]},
 ];
 const VR_MODES = [
@@ -673,10 +688,12 @@ const VR_MODES = [
      +"読み終えて黙ると、次の句へ進みます。<b>イヤホンは外して</b>スピーカーで流してください。"},
 ];
 let currentVR = VR_MODES[0];
-let currentVT = VR_TEXTS[0];
+let currentVT = VR_TEXTS[VR_TEXTS.length-1];   // 既定は最新のレッスンの文章
 try{
   const s=localStorage.getItem("vt_vrmode");
   if(s){ const f=VR_MODES.find(m=>m.id===s); if(f) currentVR=f; }
+  const t=localStorage.getItem("vt_vrtext");
+  if(t){ const f=VR_TEXTS.find(x=>x.id===t); if(f) currentVT=f; }
 }catch(e){}
 let vrVowRef=null;    // 直近の①（②のリズム比較に使う）
 let vrTeacher=null;   // 手本の解析結果
@@ -691,6 +708,23 @@ VR_MODES.forEach(mo=>{
   b.onclick=()=>selectVR(mo);
   $("vrRow").appendChild(b);
 });
+/* 文章の切り替え（v1.17.0）。履歴・①とのリズム比較・③の手本は文章ごとに分かれている */
+VR_TEXTS.forEach(tx=>{
+  const b=document.createElement("button");
+  b.className="mora"+(tx.id===currentVT.id?" active":"");
+  b.textContent=tx.short;
+  b.dataset.vt=tx.id;
+  b.onclick=()=>selectVT(tx);
+  $("vtRow").appendChild(b);
+});
+function selectVT(tx){
+  if(recording) stopRecording(true);
+  vrAbort();
+  currentVT=tx;
+  try{ localStorage.setItem("vt_vrtext",tx.id); }catch(e){}
+  $("vtRow").querySelectorAll(".mora").forEach(b=>b.classList.toggle("active", b.dataset.vt===tx.id));
+  selectVR(currentVR);
+}
 function renderVRText(){
   const box=$("vrText"); box.innerHTML="";
   box.className="vrtext "+(currentVR.id==="vow"?"vow":"txt");
@@ -757,7 +791,7 @@ function vrFrames(buf, rate, thrFrom){
   const noise=q(0.10), sig=q(0.90);
   const thr=noise+(sig-noise)*0.3;
   const f0=db.map((v,i)=> v>thr ? vrPitch(x, i*hop, win, r) : 0);
-  return {db, f0, thr, hopT:hop/r, n:db.length};
+  return {db, f0, thr, hopT:hop/r, n:db.length, x, r, win};
 }
 /* 声が出ている区間を拾う。gap 秒以下の切れ目はつなぎ、minLen 秒未満は捨てる */
 function vrSegments(fr, gap, minLen, from, to){
@@ -1117,7 +1151,7 @@ function vrEvaluateRep(buf, rate, windows, tt){
   if(ok.length<rows.length) advice.push((rows.length-ok.length)+"句で声を拾えませんでした。手本が鳴り終わってから読み始めてください。");
   if(vrTeacher && vrTeacher.lessonScore!=null) advice.push("レッスン中のあなたは同じ物差しで "+vrTeacher.lessonScore+"点でした。"+(score>=vrTeacher.lessonScore?"今日はそれを上回っています。":"まずはそこを目標に。"));
   if(!advice.length) advice.push("手本によく付いていけています。次は句の終わりまで同じ強さで。");
-  resultLabel="母音読み（手本のあとに）";
+  resultLabel="母音読み（手本のあとに／"+currentVT.short+"）";
   vrLast={x, rate, rows};
   showResult(score,m,advice,null);
   $("kviz").classList.add("hidden"); $("kcap").classList.add("hidden");
@@ -1147,6 +1181,92 @@ function vrRenderRows(rows){
   });
 }
 
+/* ---- 響き（倍音）と澄み（v1.17.0） ----
+   2026-10-03 のレッスン（ホワイトボードの「響いてる／こもってない／倍音」）から。
+   響き：声が出ている区間の平均スペクトルで、2〜4kHz（耳がいちばん敏感で、
+         「歌手のフォルマント」が立つ帯域）のエネルギーが、50Hz〜1kHz（基音と第1フォルマント）に
+         比べて何dBか。高いほど「通る」、低いほど「こもる」。
+   澄み：高い帯域が強くても、それが息の雑音なら響きではない。同じ 2〜4kHz の中で、
+         倍音の山（基音の整数倍）が山と山のあいだの谷より何dB高いかを見る。
+         倍音なら山がくっきり立ち、息の雑音なら谷が埋まって平らになる。息漏れで響きを稼いでいないかの検査。
+   どちらもマイクの特性に左右されるので、端末をまたいで絶対値を比べない。自分の推移を見る。 */
+const VR_RING_LO=[50,1000], VR_RING_HI=[2000,4000];
+function vrTimbre(buf, rate, fr, segs){
+  const N = rate>32000 ? 2048 : 1024;
+  const hann=new Float32Array(N); for(let i=0;i<N;i++) hann[i]=0.5-0.5*Math.cos(2*Math.PI*i/(N-1));
+  const frames=[];
+  segs.forEach(([a,b])=>{ for(let i=a;i<b;i++) if(fr.f0[i]>0) frames.push(i); });
+  if(frames.length<10) return null;
+  const step=Math.max(1, Math.ceil(frames.length/300));   // FFT は重いので最大300フレームに間引く
+  const acc=new Float64Array(N/2);
+  const re=new Float64Array(N), im=new Float64Array(N);
+  let cnt=0, hp=0, hv=0, hn=0;
+  for(let k=0;k<frames.length;k+=step){
+    const st=Math.round(frames[k]*fr.hopT*rate);
+    if(st+N>buf.length) continue;
+    for(let i=0;i<N;i++){ re[i]=buf[st+i]*hann[i]; im[i]=0; }
+    fft(re,im);
+    for(let j=1;j<N/2;j++) acc[j]+=re[j]*re[j]+im[j]*im[j];
+    cnt++;
+    // 2〜4kHz の倍音の山と、山と山のあいだの谷。山の間隔が窓の主ローブ（±2ビン）に収まらないほど f0 が低いフレームは使わない（48kHz で約89Hz未満）
+    const f0=fr.f0[frames[k]], sp=f0/rate*N;
+    if(sp>=3.8){
+      const pw=j=>re[j]*re[j]+im[j]*im[j];
+      for(let h=Math.ceil(VR_RING_HI[0]/f0); (h+0.5)*f0<=VR_RING_HI[1]; h++){
+        const c=h*sp, v=(h+0.5)*sp;
+        let pk=0; for(let j=Math.round(c)-1;j<=Math.round(c)+1;j++) pk=Math.max(pk,pw(j));
+        let vl=Infinity; for(let j=Math.round(v)-1;j<=Math.round(v)+1;j++) vl=Math.min(vl,pw(j));
+        hp+=pk; hv+=vl; hn++;
+      }
+    }
+  }
+  if(cnt<10) return null;
+  const bin=f=>Math.max(1,Math.min(N/2-1,Math.round(f/rate*N)));
+  const band=([f0,f1])=>{ let s=0; for(let j=bin(f0);j<=bin(f1);j++) s+=acc[j]; return s; };
+  const ring=10*Math.log10(band(VR_RING_HI)/(band(VR_RING_LO)+1e-20)+1e-20);
+  // 描画用：100Hz〜6kHz を対数で60点。各点は前後の帯域の平均（dB）
+  const pts=[], fmin=100, fmax=Math.min(6000, rate/2*0.95);
+  for(let p=0;p<60;p++){
+    const fa=fmin*Math.pow(fmax/fmin,p/60), fb=fmin*Math.pow(fmax/fmin,(p+1)/60);
+    let s=0,c=0; for(let j=bin(fa);j<=bin(fb);j++){ s+=acc[j]; c++; }
+    pts.push({f:Math.sqrt(fa*fb), db:10*Math.log10(s/(c||1)+1e-20)});
+  }
+  const clear = hn>=40 ? 10*Math.log10(hp/(hv+1e-20)) : null;   // 倍音の山が谷より何dB上か
+  return {ring, clear, pts, frames:cnt};
+}
+/* 採点の目安（仮置き。実際の記録がたまったら見直す）
+   響き：−26dB で0点、−12dB で満点。澄み：3dB で0点、15dB で満点 */
+function vrRingTxt(db){ return "低い側より "+Math.abs(db).toFixed(1)+"dB "+(db<=0?"低い":"高い"); }
+function vrRingScore(db){ return db==null ? null : clamp((db+26)/14*100); }
+function vrClearScore(db){ return db==null ? null : clamp((db-3)/12*100); }
+function drawRing(t){
+  const c=$("kviz"); c.classList.remove("hidden");
+  const ctx=c.getContext("2d");
+  const W=c.width=c.clientWidth*2, H=c.height=260;
+  ctx.fillStyle="#141414"; ctx.fillRect(0,0,W,H);
+  const pts=t.pts, f0=pts[0].f, f1=pts[pts.length-1].f;
+  const x=f=>Math.log(f/f0)/Math.log(f1/f0)*(W-20)+10;
+  const top=Math.max(...pts.map(p=>p.db));
+  const y=d=>H-28-((Math.max(-60,Math.min(0,d-top))+60)/60)*(H-48);
+  // 帯域の色分け：低い側（基音・第1フォルマント）と、響きの帯域（2〜4kHz）
+  ctx.fillStyle="rgba(120,144,156,0.22)";
+  ctx.fillRect(x(Math.max(f0,VR_RING_LO[0])),0,x(VR_RING_LO[1])-x(Math.max(f0,VR_RING_LO[0])),H-22);
+  ctx.fillStyle="rgba(198,40,40,0.28)";
+  ctx.fillRect(x(VR_RING_HI[0]),0,x(Math.min(f1,VR_RING_HI[1]))-x(VR_RING_HI[0]),H-22);
+  ctx.strokeStyle="#e8e8e8"; ctx.lineWidth=2; ctx.beginPath();
+  pts.forEach((p,i)=>{ const px=x(p.f), py=y(p.db); i?ctx.lineTo(px,py):ctx.moveTo(px,py); });
+  ctx.stroke();
+  ctx.fillStyle="#cfcfcf"; ctx.font="19px sans-serif";
+  [100,250,500,1000,2000,4000].forEach(f=>{ if(f>=f0&&f<=f1) ctx.fillText(f>=1000?(f/1000)+"k":f, x(f)-10, H-4); });
+  ctx.fillText("低い側（基音・第1フォルマント）", x(Math.max(f0,VR_RING_LO[0]))+6, 24);
+  ctx.fillStyle="#ef9a9a";
+  ctx.fillText("響きの帯域 2〜4kHz", x(VR_RING_HI[0])+6, 24);
+  $("kcap").classList.remove("hidden");
+  $("kcap").innerHTML="声が出ている区間の<b>平均スペクトル</b>（倍音の分布）。右の赤い帯（2〜4kHz）の山が高いほど声が通り、"
+    +"低いと「こもった」声に聞こえます。今回は<b>"+vrRingTxt(t.ring)+"</b>。"
+    +"マイクによって形が変わるので、<b>同じ端末どうしで</b>見比べてください。";
+}
+
 /* ---- ①② 一人で読む ---- */
 function evaluateVRead(buf, m, advice){
   const fr=vrFrames(buf, sr);
@@ -1161,33 +1281,50 @@ function evaluateVRead(buf, m, advice){
   const whole=vrFeat(fr, segs[0][0], segs[segs.length-1][1], 200);
   m.push(["句末の支え",supS,drops.length?"句末で −"+mean(drops).toFixed(1)+"dB（"+drops.length+"句）":"–"]);
   m.push(["句ごとの音量のそろい",lvS,"ばらつき "+sd.toFixed(1)+"dB"]);
+  // 響きと澄み（v1.17.0）。澄みが低い（＝2〜4kHz の中身が息の雑音）ときは、響きを澄み以上には数えない
+  const tm=vrTimbre(buf, sr, fr, segs);
+  const ringS = tm ? vrRingScore(tm.ring) : null;
+  const clearS = tm ? vrClearScore(tm.clear) : null;
+  const ringEff = (ringS!=null && clearS!=null && clearS<50) ? Math.min(ringS, clearS) : ringS;
+  if(ringS!=null) m.push(["響き（2〜4kHzの倍音）",ringS,vrRingTxt(tm.ring)]);
+  if(clearS!=null) m.push(["倍音の澄み（息の雑音の少なさ）",clearS,"倍音の山が谷より +"+tm.clear.toFixed(1)+"dB"]);
+  const tw = ringEff==null ? 0 : (clearS==null ? 0.25 : 0.30);   // 響き＋澄みの合計の重み
+  const tone = ringEff==null ? 0 : (clearS==null ? ringEff : ringEff*0.65+clearS*0.35);
   let score;
   if(currentVR.id==="vow"){
     const vf=mean(feats.map(f=>f.voicedFrac));
     const lgS=clamp((vf-0.75)/0.2*100);
     m.push(["母音のつながり",lgS,"句の中で声が出ている割合 "+Math.round(vf*100)+"%"]);
-    score=Math.round(supS*0.45+lvS*0.25+lgS*0.30);
+    score=Math.round((supS*0.45+lvS*0.25+lgS*0.30)*(1-tw)+tone*tw);
     if(lgS<60) advice.push("母音の流れが途切れています（声が出ている割合 "+Math.round(vf*100)+"%）。母音読みには子音がないので、本来は切れ目なくつながります。句の中では息を止めず、口の形だけを動かしてください。");
-    vrVowRef={t:Date.now(), textId:currentVT.id, whole};
-    resultLabel="母音読み（① 母音で）";
+    vrVowRef={t:Date.now(), textId:currentVT.id, whole, ring:tm?tm.ring:null};
+    resultLabel="母音読み（① 母音で／"+currentVT.short+"）";
   }else{
     const ref = (vrVowRef && vrVowRef.textId===currentVT.id && Date.now()-vrVowRef.t<60*60*1000) ? vrVowRef : null;
     if(ref && whole){
       const rh=vrRhythm(ref.whole, whole);
       m.push(["①とのリズムの一致",rh.score,"長さ ①の "+Math.round(rh.ratio*100)+"%"]);
-      score=Math.round(supS*0.4+lvS*0.3+rh.score*0.3);
+      score=Math.round((supS*0.4+lvS*0.3+rh.score*0.3)*(1-tw)+tone*tw);
       if(rh.score<60) advice.push("①の母音読みとリズムが変わっています（長さ ①の "+Math.round(rh.ratio*100)+"%）。子音が入っても、母音の長さと流れは①と同じ、を意識してください。");
+      if(ref.ring!=null && tm && ref.ring-tm.ring>=3) advice.push("①（母音だけ）より響きが "+(ref.ring-tm.ring).toFixed(1)+"dB 落ちています。子音が入ると口の中が狭くなりがちです。①で作った母音の響きを、本文でも保ってください。");
     }else{
-      score=Math.round(supS*0.55+lvS*0.45);
-      advice.push("先に①（母音で）を録ると、①とのリズムの一致も採点します。");
+      score=Math.round((supS*0.55+lvS*0.45)*(1-tw)+tone*tw);
+      advice.push("先に①（母音で）を録ると、①とのリズムの一致と、響きの差も見られます。");
     }
-    resultLabel="母音読み（② 本文で）";
+    resultLabel="母音読み（② 本文で／"+currentVT.short+"）";
   }
   if(supS<60) advice.push("句の終わりで声が落ちています（平均 −"+mean(drops).toFixed(1)+"dB）。最後の母音まで息を残し、お腹で押し出すつもりで。");
   if(lvS<60) advice.push("句ごとの音量がそろっていません（ばらつき "+sd.toFixed(1)+"dB）。息継ぎのたびにお腹で吸い直して、毎回同じ強さで入りましょう。");
-  if(!advice.length) advice.push("よく支えられています。次は③で手本の抑揚に合わせてみましょう。");
+  if(clearS!=null && clearS<50)
+    advice.push("2〜4kHz の中身が、倍音より息の音が多めです（倍音の山が谷より +"+tm.clear.toFixed(1)+"dB しか立っていません）。息を混ぜて明るく聞かせるのではなく、芯のある声で響かせてください。"
+      +(ringS>=60 ? "響きの点は、澄みの点までしか数えていません。" : ""));
+  else if(ringEff!=null && ringEff<60)
+    advice.push("声がこもり気味です（2〜4kHz が"+vrRingTxt(tm.ring)+"）。息を強く押すより、口の中を広く保って母音をはっきり作るほうがこの帯域は上がります。");
+  if(!advice.length) advice.push("よく支えられて、よく響いています。次は③で手本の抑揚に合わせてみましょう。");
   showResult(score,m,advice,null);
-  $("kviz").classList.add("hidden"); $("kcap").classList.add("hidden");
+  $("cmpBox").classList.add("hidden");
+  if(tm) drawRing(tm);
+  else { $("kviz").classList.add("hidden"); $("kcap").classList.add("hidden"); }
 }
 
 /* に・る：カメラは鏡。最初の1粒と最後の1粒を1枚ずつ残して並べる。
@@ -3219,7 +3356,7 @@ function drawChart(){
       : currentEx.id==="flap"
         ? "スコア推移（"+currentFlap.label+" "+currentTempo.ms+"ms の直近12回）"
         : currentEx.id==="vread"
-          ? "スコア推移（母音読み "+currentVR.short+" の直近12回）"
+          ? "スコア推移（母音読み "+currentVR.short+"・"+currentVT.short+" の直近12回）"
           : "スコア推移（この練習の直近12回）";
   const c=$("chart"), ctx=c.getContext("2d");
   const W=c.width=c.clientWidth*2, H=c.height=240;
