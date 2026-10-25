@@ -232,9 +232,10 @@
 <script>
 "use strict";
 /* ================= バージョン ================= */
-const APP_VERSION = "v1.18.0";
+const APP_VERSION = "v1.18.1";
 const APP_DATE    = "2026-10-25";
 const CHANGELOG = [
+  ["v1.18.1","2026-10-25","巻き舌（さ行）の採点を実録音に合わせて修正（区切らずに一気に言ってもグループが取れるよう、粒の並び順で 4・4・4・4・4・4・5 に当てはめる／息のもちの落ち込みは最初の4粒と最後の5粒で比べる／グループが取れないときは頭の音の伸びを出さない／くっついて1粒に数えた粒を数え、数え落としを「届かず」と言わない／録音レベルが低いときは雑音の大きさに合わせて「お腹で切る」の基準を調整）"],
   ["v1.18.0","2026-10-25","「巻き舌」に さ行版 を追加（「スススス サススス スススス シススス セススス ソススス すすすすす」を一息で。ら行版はそのまま。さ行は舌が震えないので、粒の数・テンポ・摩擦の鋭さ・摩擦の長さ・頭の音の伸びに加え、**息のもち**（息継ぎせずに最後まで言い切れたか・後半で弱らないか）と**お腹で切れているか**（粒の間の谷の深さと立ち上がりの速さ）の7軸で採点する）"],
   ["v1.17.0","2026-10-03","「母音読み」に2つ追加（① 文章を選べるようにし、2026-10-03 のレッスンの文章「アジア大会・レスリング」を追加。② ①②の採点に「響き」と「倍音の澄み」を追加。響きは声が出ている区間の平均スペクトルで、2〜4kHz（耳が最も敏感で、声が通るかを決める帯域）が 50Hz〜1kHz より何dB低いか。澄みは同じ 2〜4kHz の中で、倍音の山が山と山のあいだの谷より何dB高いか。息の雑音で明るく聞かせても澄みは上がらないので、澄みが低いときは響きを澄みの点までしか数えない。結果の下に倍音の分布（平均スペクトル）を表示。どちらもマイクの特性で絶対値が変わるため、同じ端末どうしで推移を見る）"],
   ["v1.16.0","2026-09-26","「母音読み」を追加（① 本文から母音だけを抜いた行を読む → ② 本文を腹式で読む → ③ 先生の録音を1句ずつ流して後について読む。③は抑揚の形・抑揚の幅・リズム・句末の支えを手本と比べて採点。手本は端末内のファイルを選ぶ方式で、アプリには埋め込まない。レッスンの掛け合い録音は声の高さで先生と自分に分け、レッスン中の自分の回も同じ物差しで採点して基準線にする）"],
@@ -3195,18 +3196,34 @@ function analyzeSa(buf){
   // グループ分け：間隔が中央値の1.7倍（かつ +120ms）を超えたら区切り
   const iv=[]; for(let k=1;k<grains.length;k++) iv.push(grains[k].t-grains[k-1].t);
   const ivMed=vrMedian(iv);
-  const groups=[[0]];
+  const pauseGroups=[[0]];
   for(let k=1;k<grains.length;k++){
-    if(iv[k-1] > Math.max(ivMed*1.7, ivMed+0.12)) groups.push([k]);
-    else groups[groups.length-1].push(k);
+    if(iv[k-1] > Math.max(ivMed*1.7, ivMed+0.12)) pauseGroups.push([k]);
+    else pauseGroups[pauseGroups.length-1].push(k);
   }
-  // テンポ：グループ内の間隔のばらつき
-  const inIv=[]; groups.forEach(g=>{ for(let x=1;x<g.length;x++) inIv.push(grains[g[x]].t-grains[g[x-1]].t); });
+  const expected=mode_sa_expected();
+  const count=grains.length;
+  /* v1.18.1：区切らずに一気に言うと間でグループが取れない。
+     間で7グループ取れればそれを使い、取れなければ粒の並び順で 4・4・4・…・5 に当てはめる。
+     頭の音の伸びは、間で取れたときか、粒の数がぴったりのときだけ出す（それ以外は位置がずれる）。 */
+  const pattern=currentRoll.groups||[];
+  let groups, groupMode;
+  if(pattern.length && pauseGroups.length===pattern.length){ groups=pauseGroups; groupMode="pause"; }
+  else {
+    groups=[]; let k=0;
+    for(let gi=0; gi<pattern.length && k<count; gi++){
+      const n = gi===pattern.length-1 ? count-k : pattern[gi];
+      const g=[]; for(let x=0;x<n && k<count;x++) g.push(k++);
+      groups.push(g);
+    }
+    if(k<count) groups[groups.length-1].push(...Array.from({length:count-k},(_,x)=>k+x));
+    groupMode = count===expected ? "order" : "none";
+  }
+  // テンポ：連続した粒の間隔のばらつき（グループの切れ目の長い間は除く）
+  const inIv=iv.filter(v=>v <= Math.max(ivMed*1.7, ivMed+0.12));
   const ivM=mean(inIv), ivCv = inIv.length>=3 ? stdev(inIv)/ivM : 1;
   const tempoScore = inIv.length>=3 ? clamp(100-(ivCv-0.10)*300) : 0;
 
-  const expected=mode_sa_expected();
-  const count=grains.length;
   const countScore=clamp(100-Math.abs(count-expected)*6);
 
   const cents=grains.map(g=>g.cent).filter(c=>c);
@@ -3218,10 +3235,12 @@ function analyzeSa(buf){
   const lenScore = lenM>SA_LEN_OK_HI ? clamp(100-(lenM-SA_LEN_OK_HI)*1.0)
                  : lenM<SA_LEN_OK_LO ? clamp(100-(SA_LEN_OK_LO-lenM)*3) : 100;
   const longN=grains.filter(g=>g.len>200).length;
+  // くっついて1粒に数えた疑い：長さが中央値の1.7倍を超える粒
+  const mergedN=grains.filter(g=>g.len>lenM*1.7).length;
 
   // 頭の音の伸び：3粒以上のグループで、先頭の長さ ÷ 残りの中央値
   const ratios=[]; const heads=[];
-  groups.forEach(g=>{
+  if(groupMode!=="none") groups.forEach(g=>{
     if(g.length<3) return;
     const rest=vrMedian(g.slice(1).map(k=>grains[k].len));
     if(rest>0){ ratios.push(grains[g[0]].len/rest); heads.push(g[0]); }
@@ -3233,9 +3252,11 @@ function analyzeSa(buf){
 
   /* 息のもち：息継ぎ（長い間）と、最後のグループの落ち込み */
   const breaths=iv.filter(v=>v>SA_BREATH_GAP).length;
-  const gLv=g=>mean(g.map(k=>grains[k].lv));
-  const fade = groups.length>=2 ? gLv(groups[0]) - gLv(groups[groups.length-1]) : 0;
-  const reached = count>=expected*0.85;
+  // 落ち込みは最初の4粒と最後の5粒の強さで比べる（グループの取れ方に左右されない）
+  const nHead=Math.min(4,Math.floor(count/2)), nTail=Math.min(5,Math.floor(count/2));
+  const fade = mean(grains.slice(0,nHead).map(g=>g.lv)) - mean(grains.slice(count-nTail).map(g=>g.lv));
+  const reachedRaw = count>=expected*0.85;
+  const reached = reachedRaw || (count+mergedN)>=expected*0.85;   // くっついた粒を足せば届くなら「届かず」とは言わない
   let breathScore = 100 - breaths*30 - Math.max(0,fade-SA_FADE_OK)*SA_FADE_PER_DB;
   if(!reached) breathScore -= Math.round((expected-count)/expected*100);
   breathScore = clamp(breathScore);
@@ -3262,10 +3283,15 @@ function analyzeSa(buf){
   });
   const cutDb = cuts.length ? vrMedian(cuts) : 0;
   const riseMs = rises.length ? vrMedian(rises) : 999;
-  const depthScore = clamp((cutDb-SA_CUT_BAD)/(SA_CUT_GOOD-SA_CUT_BAD)*100);
+  /* v1.18.1：録音レベルが低いと雑音が谷を埋めるので、落とせる余地（粒の山 − 雑音の床）に合わせて基準を下げる */
+  const tsS=ts.slice().sort((a,b)=>a-b), tFloor=tsS[Math.round((tsS.length-1)*0.05)];
+  const roomDb = vrMedian(grains.map(g=>{ let p=-Infinity; for(let j=g.a;j<=g.b;j++) if(ts[j]>p) p=ts[j]; return p; })) - tFloor;
+  const cutGood = Math.max(8, Math.min(SA_CUT_GOOD, roomDb*0.6));
+  const cutBad  = Math.min(SA_CUT_BAD, cutGood/3);
+  const depthScore = clamp((cutDb-cutBad)/(cutGood-cutBad)*100);
   const riseScore  = clamp(100-(riseMs-SA_RISE_GOOD)/(SA_RISE_BAD-SA_RISE_GOOD)*100);
   const cutScore   = Math.round(depthScore*0.65+riseScore*0.35);
-  const shallowN   = cuts.filter(c=>c<SA_CUT_BAD+2).length;
+  const shallowN   = cuts.filter(c=>c<cutBad+2).length;
 
   /* 重み：息のもちとお腹で切る を重く（各20%） */
   const parts = [
@@ -3279,8 +3305,8 @@ function analyzeSa(buf){
   return {score, count, expected, countScore, groups:groups.length,
           ivM, ivCv, tempoScore, centM, lowN, sharpScore, lenM, longN, lenScore,
           headR, headWorst, headScore,
-          breaths, fade, reached, breathScore,
-          cutDb, riseMs, depthScore, riseScore, cutScore, shallowN,
+          breaths, fade, reached, reachedRaw, mergedN, breathScore, groupMode,
+          cutDb, riseMs, depthScore, riseScore, cutScore, shallowN, roomDb, cutGood,
           detail:{hs, ts, thr, grains, heads, first:grains[0].a, last:grains[grains.length-1].b}};
 }
 function mode_sa_expected(){ return (currentRoll.groups||[]).reduce((a,b)=>a+b,0) || 29; }
@@ -3333,17 +3359,19 @@ function evaluateSa(buf, m, advice){
     return;
   }
   resultLabel="巻き舌（さ行）";
-  m.push(["粒の数", r.countScore, r.count+"粒（目安 "+r.expected+"粒）・"+r.groups+"グループ"]);
+  m.push(["粒の数", r.countScore, r.count+"粒（目安 "+r.expected+"粒）"+(r.mergedN?"・くっついた疑い "+r.mergedN:"")]);
   m.push(["テンポの安定", r.tempoScore, (1/r.ivM).toFixed(1)+"粒/秒・ばらつき "+Math.round(r.ivCv*100)+"%"]);
   m.push(["摩擦の鋭さ", r.sharpScore, "重心 "+(r.centM/1000).toFixed(1)+"kHz（目標 "+(SA_CENT_GOOD/1000).toFixed(1)+"kHz以上）"]);
   m.push(["摩擦の長さ", r.lenScore, "1粒 "+Math.round(r.lenM)+"ms（目安 "+SA_LEN_OK_LO+"〜"+SA_LEN_OK_HI+"ms）"]);
   if(r.headScore!==null) m.push(["頭の音の伸び", r.headScore, "後ろのスの "+r.headR.toFixed(2)+"倍（最大 "+r.headWorst.toFixed(2)+"倍）"]);
-  m.push(["息のもち", r.breathScore, (r.breaths? "息継ぎ "+r.breaths+"回" : "一息")+"・最後のグループ "
+  m.push(["息のもち", r.breathScore, (r.breaths? "息継ぎ "+r.breaths+"回" : "一息")+"・最後の5粒 "
           +(r.fade>=0? "−"+r.fade.toFixed(1) : "+"+(-r.fade).toFixed(1))+"dB"+(r.reached?"":"・最後まで届かず")]);
-  m.push(["お腹で切る", r.cutScore, "粒の間の谷 "+r.cutDb.toFixed(0)+"dB・立ち上がり "+Math.round(r.riseMs)+"ms"]);
+  m.push(["お腹で切る", r.cutScore, "粒の間の谷 "+r.cutDb.toFixed(0)+"dB（目標 "+r.cutGood.toFixed(0)+"dB）・立ち上がり "+Math.round(r.riseMs)+"ms"]);
 
   if(r.breaths>0) advice.push("途中で息継ぎが "+r.breaths+"回 入っています。<b>全体を一息で</b>言い切るのが課題です。"
     +"吸いすぎず、1粒に使う息を少なくしてください。お腹で1粒ずつ押して止めれば、息は最後まで残ります。");
+  else if(!r.reachedRaw && r.reached) advice.push("粒が "+r.count+"個しか数えられませんでした（目安 "+r.expected+"）。"
+    +"長くつながった粒が "+r.mergedN+"個あり、<b>ス同士がくっついて1粒に数えられた</b>ようです。言い切れなかったのではなく、切れていないことが原因です。");
   else if(!r.reached) advice.push("最後まで届いていません（"+r.count+"粒／目安 "+r.expected+"粒）。息が尽きる前に、1粒あたりの息をもっと少なく。");
   if(r.fade>SA_FADE_OK+2) advice.push("最後のグループが最初より "+r.fade.toFixed(1)+"dB 弱くなっています。"
     +"息が尽きる前に<b>お腹の支えが先に抜けている</b>状態です。最後の「すすすすす」こそ、お腹を引き込んで押し切ってください。");
@@ -3351,6 +3379,8 @@ function evaluateSa(buf, m, advice){
     if(r.depthScore<60) advice.push("粒の間が切れていません（谷 "+r.cutDb.toFixed(0)+"dB）。「スー」と息が流れっぱなしです。"
       +"<b>1粒ごとにお腹をキュッと押して、すぐ止める</b>。「すっ・すっ・すっ」と、粒の後ろに小さな無音を作ってください。"
       +"お腹に手を当てて、1粒ごとに手が押し返されるのを確かめながらやると分かります。");
+    if(1/r.ivM>4.5) advice.push("いまは 1秒に "+(1/r.ivM).toFixed(1)+"粒 と速めです。この速さだとお腹で止める時間がありません。"
+      +"<b>まず1秒に3粒くらいまで落として</b>、粒の後ろの無音を作る感覚をつかんでから速さを戻してください。");
     if(r.riseScore<60) advice.push("立ち上がりが鈍いです（"+Math.round(r.riseMs)+"ms）。息がじわっと出ています。"
       +"喉や口ではなく、お腹の一押しで息を一瞬で出してください。");
   }
@@ -3361,6 +3391,7 @@ function evaluateSa(buf, m, advice){
     +"子音で息を先に出しすぎています。<b>「ス」は短く、すぐ次へ</b>。息の量ではなく隙間の細さで音を作ります。");
   if(r.lenScore<60 && r.lenM<SA_LEN_OK_LO) advice.push("摩擦が短すぎて弱いです（"+Math.round(r.lenM)+"ms）。息を少しだけ強く当ててください。");
   if(r.longN>=2) advice.push("途中で「スー」と伸びた粒が "+r.longN+"個あります。粒が分かれていないので、1つずつ切ってください。");
+  if(r.groupMode==="none") advice.push("粒の数が目安と合わず、グループの頭（サ・シ・セ・ソ）の位置が特定できないので、頭の音の伸びは今回は出していません。");
   if(r.headScore!==null && r.headScore<60) advice.push("グループの頭（サ・シ・セ・ソ）が後ろのスの "+r.headR.toFixed(1)+"倍伸びています。"
     +"<b>言い出しで子音を引きずる癖</b>です。頭こそ短く、後ろのスと同じ長さで入ってください。"
     +"頭の前に一拍おいて、息を吸い直してから軽く入ると揃いやすくなります。");
