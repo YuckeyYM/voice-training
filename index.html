@@ -119,6 +119,7 @@
   <div class="moras hidden" id="brRow"></div>
   <div class="moras hidden" id="flRow"></div>
   <div class="moras hidden" id="tpRow"></div>
+  <div class="moras hidden" id="rlRow"></div>
   <div class="moras hidden" id="vtRow"></div>
   <div class="moras hidden" id="vrRow"></div>
   <div class="hidden" id="vrBox">
@@ -231,9 +232,10 @@
 <script>
 "use strict";
 /* ================= バージョン ================= */
-const APP_VERSION = "v1.17.0";
-const APP_DATE    = "2026-10-03";
+const APP_VERSION = "v1.18.0";
+const APP_DATE    = "2026-10-25";
 const CHANGELOG = [
+  ["v1.18.0","2026-10-25","「巻き舌」に さ行版 を追加（「スススス サススス スススス シススス セススス ソススス すすすすす」を一息で。ら行版はそのまま。さ行は舌が震えないので、粒の数・テンポ・摩擦の鋭さ・摩擦の長さ・頭の音の伸びに加え、**息のもち**（息継ぎせずに最後まで言い切れたか・後半で弱らないか）と**お腹で切れているか**（粒の間の谷の深さと立ち上がりの速さ）の7軸で採点する）"],
   ["v1.17.0","2026-10-03","「母音読み」に2つ追加（① 文章を選べるようにし、2026-10-03 のレッスンの文章「アジア大会・レスリング」を追加。② ①②の採点に「響き」と「倍音の澄み」を追加。響きは声が出ている区間の平均スペクトルで、2〜4kHz（耳が最も敏感で、声が通るかを決める帯域）が 50Hz〜1kHz より何dB低いか。澄みは同じ 2〜4kHz の中で、倍音の山が山と山のあいだの谷より何dB高いか。息の雑音で明るく聞かせても澄みは上がらないので、澄みが低いときは響きを澄みの点までしか数えない。結果の下に倍音の分布（平均スペクトル）を表示。どちらもマイクの特性で絶対値が変わるため、同じ端末どうしで推移を見る）"],
   ["v1.16.0","2026-09-26","「母音読み」を追加（① 本文から母音だけを抜いた行を読む → ② 本文を腹式で読む → ③ 先生の録音を1句ずつ流して後について読む。③は抑揚の形・抑揚の幅・リズム・句末の支えを手本と比べて採点。手本は端末内のファイルを選ぶ方式で、アプリには埋め込まない。レッスンの掛け合い録音は声の高さで先生と自分に分け、レッスン中の自分の回も同じ物差しで採点して基準線にする）"],
   ["v1.15.0","2026-09-19","「に・る 連続」にテンポ選択を追加（400/300/200/150ms。150ms は通常の話速で、「じゅうににち」の「にに」に相当。期待粒数・最短間隔・平滑化・谷の幅の基準をすべて拍に連動させ、テンポ別にスコアを記録）"],
@@ -257,7 +259,7 @@ const CHANGELOG = [
 /* ================= 練習メニュー定義 ================= */
 const EXERCISES = [
  {id:"lip", name:"1. リップロール", desc:"唇を軽く閉じて息で震わせ、一定の音程でできるだけ長く続けます。目標：10秒以上、音程と震えが安定していること。"},
- {id:"roll", name:"2. 巻き舌", desc:"「ルルルル ラルルル ルルルル リルルル レルルル ロルルル るるるるる」。舌の震えの規則性と持続を測ります。"},
+ {id:"roll", name:"2. 巻き舌", desc:"下から ら行 か さ行 を選びます。"},
  {id:"tongue", name:"3. 舌出し「あえあえ」", desc:"まず①舌を出さずに「あえあえあえ」を録音 → 次に②舌を出して同じように録音。2つの響き（音色）がどれだけ近いかを採点します。"},
  {id:"nine", name:"4. にねなのぬのなねに", desc:"鼻腔の響きを保ったまま、切れ目なくなめらかに。音のつながりと音量の均一さを測ります。"},
  {id:"k", name:"5. Kの子音", desc:"下から練習の種類を選びます。マイクから10cmほど離してください。"},
@@ -320,6 +322,48 @@ try{
   const sb=localStorage.getItem("vt_breath");
   if(sb){ const f=BREATH_MODES.find(m=>m.id===sb); if(f) currentBreath=f; }
 }catch(e){}
+
+/* ---- 巻き舌：ら行 / さ行（v1.18.0） ----
+   ら行版は v1.0.0 からの「巻き舌」そのもの（履歴キー "roll" も変えない）。
+   さ行版は同じ並び（基本の音を4つ、先頭だけ行の音に替える）を ス で作ったもの。
+   **さ行は舌が震えない**ので、震えの規則性では測れない。代わりに摩擦音 /s/ そのものを見る。
+     粒の数・テンポ … 4〜11kHz の摩擦のエネルギーの山を1粒として数える
+     摩擦の鋭さ   … 摩擦の重心周波数。舌先と歯の隙間が狭く鋭いほど高い。
+                     舌が引けたり、隙間が広がって息が散ると下がる（「シュ」「ス゜」寄りになる）
+     摩擦の長さ   … 1粒の摩擦の長さ。長いのは息が子音で先に出ている状態
+     頭の音の伸び … 各グループの先頭（サ・シ・セ・ソ）が後ろのスより伸びていないか。
+                     言い出しで子音を引きずる癖は、文の頭でつまる感じと同じ向き
+     息のもち     … 全体を一息で言い切れたか。途中の長い間（息継ぎ）と、
+                     最初のグループに対する最後のグループの強さの落ち込みで見る
+     お腹で切る   … 「すっ・すっ・すっ」と1粒ずつ止められているか。
+                     粒の間で全体の音量がどこまで落ちるか（谷の深さ）と、
+                     次の粒の立ち上がりの速さで見る。息が流れっぱなしだと谷が浅く、
+                     喉や口だけで切ると立ち上がりが鈍る
+   なお「すすす」の ウ は東京の発音では無声化するのが普通なので、母音の有無は採点しない。 */
+const ROLL_MODES = [
+  {id:"ra", label:"ら行（ルルルル ラルルル…）", short:"ら行",
+   phrase:"ルルルル ラルルル ルルルル リルルル レルルル ロルルル るるるるる",
+   tip:"舌の震えの規則性と持続を測ります。"},
+  {id:"sa", label:"さ行（スススス サススス…）", short:"さ行",
+   phrase:"スススス サススス スススス シススス セススス ソススス すすすすす",
+   groups:[4,4,4,4,4,4,5],
+   tip:"<b>全体を一息で</b>言い切ります。吸ったら、お腹を1粒ごとに短く押して「すっ・すっ・すっ」と<b>息を止めながら</b>進みます。"
+      +"舌先は下の前歯の裏に置き、上の歯との細い隙間に息を当てて鋭い「ス」に。"
+      +"頭のサ・シ・セ・ソを後ろのスより伸ばさないこと。マイクから10cmほど離し、息が直接当たらないよう少し横から。"},
+];
+let currentRoll = ROLL_MODES[0];
+try{
+  const sv=localStorage.getItem("vt_roll");
+  if(sv){ const f=ROLL_MODES.find(m=>m.id===sv); if(f) currentRoll=f; }
+}catch(e){}
+/* さ行の目安（暫定。記録がたまったら見直す） */
+const SA_CENT_GOOD = 6000, SA_CENT_BAD = 3800;   // 摩擦の重心（Hz）
+const SA_LEN_OK_LO = 40, SA_LEN_OK_HI = 100;     // 1粒の摩擦の長さ（ms）
+const SA_HEAD_OK = 1.15, SA_HEAD_BAD = 2.0;      // 頭の音 ÷ 後ろのス の長さ比
+const SA_BREATH_GAP = 0.8;                       // これより長い間は息継ぎとみなす（秒）
+const SA_FADE_OK = 2, SA_FADE_PER_DB = 10;       // 最後のグループの落ち込み：2dBまでは許容、以降1dBごとに-10点
+const SA_CUT_GOOD = 18, SA_CUT_BAD = 6;          // 粒の間の谷の深さ（dB）
+const SA_RISE_GOOD = 15, SA_RISE_BAD = 50;       // 立ち上がり（ms）
 
 /* ---- に・る 連続（v1.13.0） ----
    「にる」の交替より、**同じ音を続ける**ほうが難しい、という本人の申告から作った。
@@ -520,6 +564,7 @@ function selectEx(ex,btn){
   $("brRow").classList.add("hidden");
   $("flRow").classList.add("hidden");
   $("tpRow").classList.add("hidden");
+  $("rlRow").classList.add("hidden");
   $("vrRow").classList.add("hidden");
   $("vtRow").classList.add("hidden");
   $("vrBox").classList.add("hidden");
@@ -554,6 +599,14 @@ function selectEx(ex,btn){
     return;
   }
   setPaceCells(SEQ_MORA_LABEL);
+  if(ex.id==="roll"){
+    moraRow.classList.add("hidden");
+    $("paceRow").classList.remove("on");
+    $("countdown").classList.remove("on");
+    $("rlRow").classList.remove("hidden");
+    selectRoll(currentRoll);
+    return;
+  }
   if(ex.id==="k"){ moraRow.classList.remove("hidden"); selectMora(currentMora); }
   else if(ex.id==="breath"){
     moraRow.classList.add("hidden");
@@ -568,6 +621,26 @@ function selectEx(ex,btn){
     $("countdown").classList.remove("on");
     drawChart();
   }
+}
+/* ---- 巻き舌のモード切り替え（v1.18.0） ---- */
+ROLL_MODES.forEach(mo=>{
+  const b=document.createElement("button");
+  b.className="mora"+(mo.id===currentRoll.id?" active":"");
+  b.textContent=mo.short;
+  b.dataset.rl=mo.id;
+  b.onclick=()=>selectRoll(mo);
+  $("rlRow").appendChild(b);
+});
+function selectRoll(mo){
+  if(recording) stopRecording(true);
+  currentRoll=mo;
+  try{ localStorage.setItem("vt_roll",mo.id); }catch(e){}
+  $("rlRow").querySelectorAll(".mora").forEach(b=>b.classList.toggle("active", b.dataset.rl===mo.id));
+  $("exDesc").innerHTML = "「"+mo.phrase+"」。　【"+mo.label+"】"+mo.tip;
+  $("resultCard").classList.add("hidden");
+  $("kviz").classList.add("hidden");
+  $("kcap").classList.add("hidden");
+  drawChart();
 }
 /* ---- 腹式呼吸のモード切り替え ---- */
 BREATH_MODES.forEach(mo=>{
@@ -3064,6 +3137,247 @@ function drawFlapDetail(d){
   ctx.fillText("緑＝母音の山（"+d.peaks.length+"粒）　赤＝子音の谷", x0, H-10);
 }
 
+/* ================= 巻き舌 さ行（v1.18.0） ================= */
+function analyzeSa(buf){
+  const N=1024, hop=Math.round(sr*0.005), hopT=hop/sr;
+  const kLo0=Math.max(1,Math.round(100*N/sr)), kLo1=Math.round(1500*N/sr);
+  const kHi0=Math.round(4000*N/sr), kHi1=Math.min((N>>1)-1, Math.round(11000*N/sr));
+  if(kHi1<=kHi0+4) return null;
+  const w=new Float32Array(N); for(let j=0;j<N;j++) w[j]=0.5-0.5*Math.cos(2*Math.PI*j/N);
+  const re=new Float32Array(N), im=new Float32Array(N);
+  const hi=[], lo=[], tot=[];
+  for(let i=0;i+N<=buf.length;i+=hop){
+    for(let j=0;j<N;j++){ re[j]=buf[i+j]*w[j]; im[j]=0; }
+    fft(re,im);
+    let eh=0, el=0, et=0;
+    for(let k=kHi0;k<=kHi1;k++) eh+=re[k]*re[k]+im[k]*im[k];
+    for(let k=kLo0;k<=kLo1;k++) el+=re[k]*re[k]+im[k]*im[k];
+    for(let k=kLo0;k<(N>>1);k++) et+=re[k]*re[k]+im[k]*im[k];
+    hi.push(10*Math.log10(eh+1e-12)); lo.push(10*Math.log10(el+1e-12)); tot.push(10*Math.log10(et+1e-12));
+  }
+  const F=hi.length; if(F<100) return null;
+  // 3フレーム（15ms）で平滑化
+  const hs=hi.map((v,i)=>{ let a=0,c=0; for(let j=Math.max(0,i-1);j<=Math.min(F-1,i+1);j++){a+=hi[j];c++;} return a/c; });
+  const srt=hs.slice().sort((a,b)=>a-b);
+  const q=p=>srt[Math.max(0,Math.min(F-1,Math.round(p*(F-1))))];
+  const floor=q(0.10), top=q(0.97);
+  if(top-floor<10) return null;                         // 摩擦がほとんど入っていない
+  // 床は母音の区間（高域がほぼ無い）で決まりやすいので、最大からの距離でも下限を切る
+  const thr=Math.max(floor+Math.max(8,(top-floor)*0.35), top-22);
+  // 摩擦のフレーム：高域が床より十分上で、かつ母音（低域が優勢）ではない
+  const act=hs.map((v,i)=> v>thr && (hi[i]-lo[i]) > -6);
+
+  // 山を拾う：活動区間の中の極大で、間に 4dB 以上の谷があるもの（最短 60ms 間隔）
+  const minD=Math.round(0.06/hopT);
+  const peaks=[];
+  for(let i=1;i<F-1;i++){
+    if(!act[i] || hs[i]<hs[i-1] || hs[i]<hs[i+1]) continue;
+    if(peaks.length){
+      const p=peaks[peaks.length-1];
+      let dip=Infinity; for(let j=p.i;j<=i;j++) if(hs[j]<dip) dip=hs[j];
+      const sep = Math.min(hs[p.i],hs[i]) - dip;
+      if(i-p.i<minD || sep<4){ if(hs[i]>hs[p.i]) peaks[peaks.length-1]={i}; continue; }
+    }
+    peaks.push({i});
+  }
+  if(peaks.length<5) return null;
+  // 1粒の範囲：山から -6dB まで（隣の山との谷で打ち切る）
+  const grains=peaks.map((p,k)=>{
+    const pk=hs[p.i];
+    const lim0 = k>0 ? peaks[k-1].i : 0, lim1 = k<peaks.length-1 ? peaks[k+1].i : F-1;
+    let a=p.i; while(a>lim0 && hs[a-1]>pk-6 && act[a-1]) a--;
+    let b=p.i; while(b<lim1 && hs[b+1]>pk-6 && act[b+1]) b++;
+    const mid=Math.round((a+b)/2)*hop + (N>>1);
+    const cent=fricCentroid(buf, Math.max(0,mid-(N>>1)), N);
+    return {i:p.i, a, b, t:a*hopT, len:(b-a+1)*hopT*1000, lv:pk, cent};
+  });
+
+  // グループ分け：間隔が中央値の1.7倍（かつ +120ms）を超えたら区切り
+  const iv=[]; for(let k=1;k<grains.length;k++) iv.push(grains[k].t-grains[k-1].t);
+  const ivMed=vrMedian(iv);
+  const groups=[[0]];
+  for(let k=1;k<grains.length;k++){
+    if(iv[k-1] > Math.max(ivMed*1.7, ivMed+0.12)) groups.push([k]);
+    else groups[groups.length-1].push(k);
+  }
+  // テンポ：グループ内の間隔のばらつき
+  const inIv=[]; groups.forEach(g=>{ for(let x=1;x<g.length;x++) inIv.push(grains[g[x]].t-grains[g[x-1]].t); });
+  const ivM=mean(inIv), ivCv = inIv.length>=3 ? stdev(inIv)/ivM : 1;
+  const tempoScore = inIv.length>=3 ? clamp(100-(ivCv-0.10)*300) : 0;
+
+  const expected=mode_sa_expected();
+  const count=grains.length;
+  const countScore=clamp(100-Math.abs(count-expected)*6);
+
+  const cents=grains.map(g=>g.cent).filter(c=>c);
+  const centM=vrMedian(cents);
+  const lowN=cents.filter(c=>c<4300).length;
+  const sharpScore=clamp((centM-SA_CENT_BAD)/(SA_CENT_GOOD-SA_CENT_BAD)*100);
+
+  const lenM=vrMedian(grains.map(g=>g.len));
+  const lenScore = lenM>SA_LEN_OK_HI ? clamp(100-(lenM-SA_LEN_OK_HI)*1.0)
+                 : lenM<SA_LEN_OK_LO ? clamp(100-(SA_LEN_OK_LO-lenM)*3) : 100;
+  const longN=grains.filter(g=>g.len>200).length;
+
+  // 頭の音の伸び：3粒以上のグループで、先頭の長さ ÷ 残りの中央値
+  const ratios=[]; const heads=[];
+  groups.forEach(g=>{
+    if(g.length<3) return;
+    const rest=vrMedian(g.slice(1).map(k=>grains[k].len));
+    if(rest>0){ ratios.push(grains[g[0]].len/rest); heads.push(g[0]); }
+  });
+  const headR = ratios.length ? vrMedian(ratios) : null;
+  const headWorst = ratios.length ? Math.max(...ratios) : null;
+  const headScore = headR===null ? null
+    : clamp(100-(headR-SA_HEAD_OK)/(SA_HEAD_BAD-SA_HEAD_OK)*100);
+
+  /* 息のもち：息継ぎ（長い間）と、最後のグループの落ち込み */
+  const breaths=iv.filter(v=>v>SA_BREATH_GAP).length;
+  const gLv=g=>mean(g.map(k=>grains[k].lv));
+  const fade = groups.length>=2 ? gLv(groups[0]) - gLv(groups[groups.length-1]) : 0;
+  const reached = count>=expected*0.85;
+  let breathScore = 100 - breaths*30 - Math.max(0,fade-SA_FADE_OK)*SA_FADE_PER_DB;
+  if(!reached) breathScore -= Math.round((expected-count)/expected*100);
+  breathScore = clamp(breathScore);
+
+  /* お腹で切る：粒と粒の間で全体の音量がどこまで落ちるか ＋ 次の粒の立ち上がり */
+  const ts=tot.map((v,i)=>{ let a=0,c=0; for(let j=Math.max(0,i-1);j<=Math.min(F-1,i+1);j++){a+=tot[j];c++;} return a/c; });
+  const cuts=[], rises=[];
+  groups.forEach(g=>{
+    for(let x=1;x<g.length;x++){
+      const A=grains[g[x-1]], B=grains[g[x]];
+      let pa=-Infinity, pb=-Infinity, dip=Infinity;
+      for(let j=A.a;j<=A.b;j++) if(ts[j]>pa) pa=ts[j];
+      for(let j=B.a;j<=B.b;j++) if(ts[j]>pb) pb=ts[j];
+      for(let j=A.i;j<=B.i;j++) if(ts[j]<dip) dip=ts[j];
+      cuts.push(Math.min(pa,pb)-dip);
+    }
+  });
+  grains.forEach(g=>{
+    const pk=hi[g.i]; let j=g.i;
+    const lim=Math.max(0,g.i-Math.round(0.15/hopT));
+    while(j>lim && hi[j]>pk-20) j--;
+    let k=j; while(k<g.i && hi[k]<pk-3) k++;
+    rises.push((k-j)*hopT*1000);
+  });
+  const cutDb = cuts.length ? vrMedian(cuts) : 0;
+  const riseMs = rises.length ? vrMedian(rises) : 999;
+  const depthScore = clamp((cutDb-SA_CUT_BAD)/(SA_CUT_GOOD-SA_CUT_BAD)*100);
+  const riseScore  = clamp(100-(riseMs-SA_RISE_GOOD)/(SA_RISE_BAD-SA_RISE_GOOD)*100);
+  const cutScore   = Math.round(depthScore*0.65+riseScore*0.35);
+  const shallowN   = cuts.filter(c=>c<SA_CUT_BAD+2).length;
+
+  /* 重み：息のもちとお腹で切る を重く（各20%） */
+  const parts = [
+    [countScore,0.10],[tempoScore,0.10],[sharpScore,0.15],[lenScore,0.10],
+    [breathScore,0.20],[cutScore,0.20],
+  ];
+  if(headScore!==null) parts.push([headScore,0.15]);
+  const wsum=parts.reduce((a,p)=>a+p[1],0);
+  const score=Math.round(parts.reduce((a,p)=>a+p[0]*p[1],0)/wsum);
+
+  return {score, count, expected, countScore, groups:groups.length,
+          ivM, ivCv, tempoScore, centM, lowN, sharpScore, lenM, longN, lenScore,
+          headR, headWorst, headScore,
+          breaths, fade, reached, breathScore,
+          cutDb, riseMs, depthScore, riseScore, cutScore, shallowN,
+          detail:{hs, ts, thr, grains, heads, first:grains[0].a, last:grains[grains.length-1].b}};
+}
+function mode_sa_expected(){ return (currentRoll.groups||[]).reduce((a,b)=>a+b,0) || 29; }
+
+function drawSaDetail(d){
+  const c=$("kviz"); c.classList.remove("hidden");
+  const ctx=c.getContext("2d");
+  const W=c.width=c.clientWidth*2, H=c.height=260;
+  ctx.fillStyle="#141414"; ctx.fillRect(0,0,W,H);
+  const pad=40, x0=pad, x1=W-pad, y0=20, y1=H-34;
+  const i0=Math.max(0,d.first-20), i1=Math.min(d.hs.length-1,d.last+20);
+  let mx=-Infinity, mn=Infinity;
+  for(let i=i0;i<=i1;i++){ if(d.hs[i]>mx) mx=d.hs[i]; if(d.hs[i]<mn) mn=d.hs[i]; }
+  mn=Math.max(mn, mx-45);
+  if(!(mx>mn)) return;
+  const X=i=>x0+(i-i0)/(i1-i0)*(x1-x0);
+  const Y=v=>y1-(Math.max(mn,v)-mn)/(mx-mn)*(y1-y0);
+  // 粒の範囲
+  d.grains.forEach((g,k)=>{
+    const low = g.cent && g.cent<4300;
+    ctx.fillStyle = low ? "rgba(224,138,138,.30)" : (g.len>200 ? "rgba(230,180,90,.30)" : "rgba(127,209,163,.22)");
+    ctx.fillRect(X(g.a), y0, Math.max(2,X(g.b)-X(g.a)), y1-y0);
+  });
+  // しきい値
+  ctx.strokeStyle="rgba(255,255,255,.18)"; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(x0,Y(d.thr)); ctx.lineTo(x1,Y(d.thr)); ctx.stroke();
+  // 全体の音量（粒の間がここまで落ちていれば「切れている」）
+  if(d.ts){
+    let tm=-Infinity; for(let i=i0;i<=i1;i++) if(d.ts[i]>tm) tm=d.ts[i];
+    const off=mx-tm;
+    ctx.strokeStyle="rgba(120,170,255,.75)"; ctx.lineWidth=1.5; ctx.beginPath();
+    for(let i=i0;i<=i1;i++){ const x=X(i), y=Y(d.ts[i]+off); i===i0?ctx.moveTo(x,y):ctx.lineTo(x,y); }
+    ctx.stroke();
+  }
+  // 高域エネルギー
+  ctx.strokeStyle="#fff"; ctx.lineWidth=2; ctx.beginPath();
+  for(let i=i0;i<=i1;i++){ const x=X(i), y=Y(d.hs[i]); i===i0?ctx.moveTo(x,y):ctx.lineTo(x,y); }
+  ctx.stroke();
+  // グループの先頭
+  ctx.fillStyle="#f2c94c";
+  d.heads.forEach(k=>{ const g=d.grains[k]; ctx.beginPath(); ctx.moveTo(X(g.a),y0); ctx.lineTo(X(g.a)-7,y0-12); ctx.lineTo(X(g.a)+7,y0-12); ctx.fill(); });
+  ctx.fillStyle="#bbb"; ctx.font="20px sans-serif";
+  ctx.fillText("緑＝ス（"+d.grains.length+"粒） 赤＝こもり 橙＝伸び ▼＝頭", x0, H-10);
+}
+
+function evaluateSa(buf, m, advice){
+  const r=analyzeSa(buf);
+  if(!r){
+    alert("「ス」の摩擦を検出できませんでした。\n\n「スススス サススス …」を、マイクから10cmほど離して録音してください。\nイヤホンのマイクは高い音を拾いにくいので、iPhone本体のマイクを使ってください。");
+    return;
+  }
+  resultLabel="巻き舌（さ行）";
+  m.push(["粒の数", r.countScore, r.count+"粒（目安 "+r.expected+"粒）・"+r.groups+"グループ"]);
+  m.push(["テンポの安定", r.tempoScore, (1/r.ivM).toFixed(1)+"粒/秒・ばらつき "+Math.round(r.ivCv*100)+"%"]);
+  m.push(["摩擦の鋭さ", r.sharpScore, "重心 "+(r.centM/1000).toFixed(1)+"kHz（目標 "+(SA_CENT_GOOD/1000).toFixed(1)+"kHz以上）"]);
+  m.push(["摩擦の長さ", r.lenScore, "1粒 "+Math.round(r.lenM)+"ms（目安 "+SA_LEN_OK_LO+"〜"+SA_LEN_OK_HI+"ms）"]);
+  if(r.headScore!==null) m.push(["頭の音の伸び", r.headScore, "後ろのスの "+r.headR.toFixed(2)+"倍（最大 "+r.headWorst.toFixed(2)+"倍）"]);
+  m.push(["息のもち", r.breathScore, (r.breaths? "息継ぎ "+r.breaths+"回" : "一息")+"・最後のグループ "
+          +(r.fade>=0? "−"+r.fade.toFixed(1) : "+"+(-r.fade).toFixed(1))+"dB"+(r.reached?"":"・最後まで届かず")]);
+  m.push(["お腹で切る", r.cutScore, "粒の間の谷 "+r.cutDb.toFixed(0)+"dB・立ち上がり "+Math.round(r.riseMs)+"ms"]);
+
+  if(r.breaths>0) advice.push("途中で息継ぎが "+r.breaths+"回 入っています。<b>全体を一息で</b>言い切るのが課題です。"
+    +"吸いすぎず、1粒に使う息を少なくしてください。お腹で1粒ずつ押して止めれば、息は最後まで残ります。");
+  else if(!r.reached) advice.push("最後まで届いていません（"+r.count+"粒／目安 "+r.expected+"粒）。息が尽きる前に、1粒あたりの息をもっと少なく。");
+  if(r.fade>SA_FADE_OK+2) advice.push("最後のグループが最初より "+r.fade.toFixed(1)+"dB 弱くなっています。"
+    +"息が尽きる前に<b>お腹の支えが先に抜けている</b>状態です。最後の「すすすすす」こそ、お腹を引き込んで押し切ってください。");
+  if(r.cutScore<60){
+    if(r.depthScore<60) advice.push("粒の間が切れていません（谷 "+r.cutDb.toFixed(0)+"dB）。「スー」と息が流れっぱなしです。"
+      +"<b>1粒ごとにお腹をキュッと押して、すぐ止める</b>。「すっ・すっ・すっ」と、粒の後ろに小さな無音を作ってください。"
+      +"お腹に手を当てて、1粒ごとに手が押し返されるのを確かめながらやると分かります。");
+    if(r.riseScore<60) advice.push("立ち上がりが鈍いです（"+Math.round(r.riseMs)+"ms）。息がじわっと出ています。"
+      +"喉や口ではなく、お腹の一押しで息を一瞬で出してください。");
+  }
+  if(r.sharpScore<60) advice.push("「ス」がこもっています（重心 "+(r.centM/1000).toFixed(1)+"kHz）。"
+    +"舌先が歯から離れて隙間が広がり、息が散っている状態です。<b>舌先を下の前歯の裏に置いたまま</b>、"
+    +"上下の歯を軽く近づけて、細い隙間に息を当ててください。"+(r.lowN>=3?"（とくにこもった粒が "+r.lowN+"個あります）":""));
+  if(r.lenScore<60 && r.lenM>SA_LEN_OK_HI) advice.push("1粒の「ス」が長すぎます（"+Math.round(r.lenM)+"ms）。"
+    +"子音で息を先に出しすぎています。<b>「ス」は短く、すぐ次へ</b>。息の量ではなく隙間の細さで音を作ります。");
+  if(r.lenScore<60 && r.lenM<SA_LEN_OK_LO) advice.push("摩擦が短すぎて弱いです（"+Math.round(r.lenM)+"ms）。息を少しだけ強く当ててください。");
+  if(r.longN>=2) advice.push("途中で「スー」と伸びた粒が "+r.longN+"個あります。粒が分かれていないので、1つずつ切ってください。");
+  if(r.headScore!==null && r.headScore<60) advice.push("グループの頭（サ・シ・セ・ソ）が後ろのスの "+r.headR.toFixed(1)+"倍伸びています。"
+    +"<b>言い出しで子音を引きずる癖</b>です。頭こそ短く、後ろのスと同じ長さで入ってください。"
+    +"頭の前に一拍おいて、息を吸い直してから軽く入ると揃いやすくなります。");
+  if(r.tempoScore<60) advice.push("テンポがばらついています（ばらつき "+Math.round(r.ivCv*100)+"%）。速さより等間隔を優先してください。");
+  if(r.countScore<60 && r.count<r.expected) advice.push("粒が足りません（"+r.count+"粒／目安 "+r.expected+"粒）。スとスがつながって1粒になっている可能性があります。");
+  if(r.countScore<60 && r.count>r.expected) advice.push("粒が多すぎます（"+r.count+"粒）。息の雑音や環境音を拾っているかもしれません。静かな場所で、マイクに息が直接当たらないようにしてください。");
+  if(!advice.length) advice.push("一息で、お腹で切った鋭い「ス」がそろっています。この質のまま少しずつ速くしていきましょう。");
+
+  $("kcap").classList.remove("hidden");
+  $("kcap").innerHTML="白い線が高い音域（4〜11kHz）の強さ、青い線が全体の音量、色の帯が1粒ずつの「ス」です。"
+    +"<b>青い線が粒の間で深く落ちていれば</b>お腹で切れていて、<b>右端まで白い山の高さが落ちなければ</b>息がもっています。"
+    +"▼の頭の帯だけ太くなっていないかも見てください。";
+  showResult(r.score, m, advice, null);
+  drawSaDetail(r.detail);
+  $("cmpBox").classList.add("hidden");
+}
+
 /* に・る の採点 */
 function evaluateFlap(buf, m, advice){
   const mo=currentFlap;
@@ -3182,6 +3496,7 @@ function evaluate(buf){
   if(ex==="ui"){ evaluateUI(buf,m,advice); return; }
   if(ex==="flap"){ evaluateFlap(buf,m,advice); return; }
   if(ex==="vread"){ evaluateVRead(buf,m,advice); return; }
+  if(ex==="roll" && currentRoll.id==="sa"){ evaluateSa(buf,m,advice); return; }
   const an=analyzeBuffer(buf);
   if(ex==="lip" || ex==="roll"){
     const dur=voicedDuration(an);
@@ -3336,6 +3651,7 @@ function histKey(){
   if(currentEx.id==="breath") return "breath:"+currentBreath.id;
   if(currentEx.id==="flap") return "flap:"+currentFlap.id+":"+currentTempo.ms;
   if(currentEx.id==="vread") return "vread:"+currentVR.id+":"+currentVT.id;
+  if(currentEx.id==="roll") return currentRoll.id==="ra" ? "roll" : "roll:"+currentRoll.id;   // ら行は従来のキーのまま
   if(currentEx.id!=="k") return currentEx.id;
   return currentMora.id==="kq" ? "k" : "k:"+currentMora.id;
 }
@@ -3357,7 +3673,9 @@ function drawChart(){
         ? "スコア推移（"+currentFlap.label+" "+currentTempo.ms+"ms の直近12回）"
         : currentEx.id==="vread"
           ? "スコア推移（母音読み "+currentVR.short+"・"+currentVT.short+" の直近12回）"
-          : "スコア推移（この練習の直近12回）";
+          : currentEx.id==="roll"
+            ? "スコア推移（巻き舌 "+currentRoll.short+" の直近12回）"
+            : "スコア推移（この練習の直近12回）";
   const c=$("chart"), ctx=c.getContext("2d");
   const W=c.width=c.clientWidth*2, H=c.height=240;
   ctx.clearRect(0,0,W,H);
